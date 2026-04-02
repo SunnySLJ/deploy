@@ -131,6 +131,11 @@
       "openclaw-weixin",
       "lossless-claw"
     ],
+    "load": {
+      "paths": [
+        "{{HOME}}/.openclaw/workspace/plugins/memory-lancedb-pro"
+      ]
+    },
     "slots": {
       "memory": "memory-lancedb-pro",
       "contextEngine": "lossless-claw"
@@ -143,6 +148,7 @@
       "memory-lancedb-pro": {
         "enabled": true,
         "config": {
+          "dbPath": "{{HOME}}/.openclaw/memory/lancedb-pro-bailian",
           "embedding": {
             "provider": "openai-compatible",
             "apiKey": "{{API_KEY}}",
@@ -200,6 +206,12 @@
           "incrementalMaxDepth": -1,
           "summaryModel": "bailian/qwen3-coder-plus"
         }
+      }
+    },
+    "installs": {
+      "lossless-claw": {
+        "source": "path",
+        "sourcePath": "{{HOME}}/.openclaw/workspace/plugins/lossless-claw-enhanced"
       }
     }
   }

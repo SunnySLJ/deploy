@@ -351,7 +351,11 @@ step7_configure_llm() {
     fi
 
     if [ -f "$template_file" ]; then
-        sed "s|{{API_KEY}}|$API_KEY|g" \
+        local gw_token
+        gw_token=$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p)
+        sed -e "s|{{API_KEY}}|$API_KEY|g" \
+            -e "s|{{HOME}}|$HOME|g" \
+            -e "s|{{GATEWAY_TOKEN}}|$gw_token|g" \
             "$template_file" \
             > "$OPENCLAW_DIR/openclaw.json"
         ok "openclaw.json 已生成 — $provider_name"
@@ -751,18 +755,62 @@ BOOTSTRAP_EOF
     fi
 }
 
-# ── 步骤 12: 配置 Memory 插件 ─────────────────────────────────
+# ── 步骤 12: 安装 Memory / Context 插件 ───────────────────────
 step12_configure_memory() {
-    step "配置 Memory 插件"
+    step "安装 Memory / Context 插件"
 
+    # 创建目录
     mkdir -p "$OPENCLAW_DIR/memory"
     mkdir -p "$WORKSPACE_DIR/memory"
     mkdir -p "$OPENCLAW_DIR/memory-md"
+    local plugins_dir="$WORKSPACE_DIR/plugins"
+    mkdir -p "$plugins_dir"
 
-    info "memory-lancedb-pro 和 lossless-claw 插件配置已写入 openclaw.json"
-    info "插件源码不随部署包分发，OpenClaw 启动时自动下载安装"
+    # 克隆 memory-lancedb-pro
+    local mlp_dir="$plugins_dir/memory-lancedb-pro"
+    if [ -d "$mlp_dir" ]; then
+        ok "memory-lancedb-pro 已存在"
+        if ask_yes_no "是否拉取最新代码？"; then
+            cd "$mlp_dir"
+            git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
+            cd "$DEPLOY_DIR"
+        fi
+    else
+        info "正在克隆 memory-lancedb-pro..."
+        git clone https://github.com/CortexReach/memory-lancedb-pro.git "$mlp_dir"
+        ok "memory-lancedb-pro 克隆完成"
+    fi
+    # 安装依赖（如果有 package.json）
+    if [ -f "$mlp_dir/package.json" ]; then
+        info "安装 memory-lancedb-pro 依赖..."
+        cd "$mlp_dir" && npm install --production 2>/dev/null && cd "$DEPLOY_DIR"
+        ok "依赖安装完成"
+    fi
+
+    # 克隆 lossless-claw-enhanced
+    local lc_dir="$plugins_dir/lossless-claw-enhanced"
+    if [ -d "$lc_dir" ]; then
+        ok "lossless-claw-enhanced 已存在"
+        if ask_yes_no "是否拉取最新代码？"; then
+            cd "$lc_dir"
+            git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
+            cd "$DEPLOY_DIR"
+        fi
+    else
+        info "正在克隆 lossless-claw-enhanced..."
+        git clone https://github.com/win4r/lossless-claw-enhanced.git "$lc_dir"
+        ok "lossless-claw-enhanced 克隆完成"
+    fi
+    # 安装依赖（如果有 package.json）
+    if [ -f "$lc_dir/package.json" ]; then
+        info "安装 lossless-claw-enhanced 依赖..."
+        cd "$lc_dir" && npm install --production 2>/dev/null && cd "$DEPLOY_DIR"
+        ok "依赖安装完成"
+    fi
+
+    info "插件路径已写入 openclaw.json (load.paths + installs)"
     info "首次启动将自动初始化向量数据库"
-    ok "Memory 目录结构已创建"
+    ok "Memory / Context 插件安装完成"
 }
 
 # ── 步骤 13: 创建定时任务 ─────────────────────────────────────

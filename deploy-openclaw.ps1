@@ -326,6 +326,9 @@ function Step7-ConfigureLLM {
     if (Test-Path $templateFile) {
         $content = Get-Content $templateFile -Raw -Encoding UTF8
         $content = $content.Replace("{{API_KEY}}", $ApiKey)
+        $content = $content.Replace("{{HOME}}", $env:USERPROFILE)
+        $gwToken = -join ((1..48) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+        $content = $content.Replace("{{GATEWAY_TOKEN}}", $gwToken)
         [System.IO.File]::WriteAllText($configPath, $content, [System.Text.Encoding]::UTF8)
         OK ("openclaw.json 已生成 - {0}" -f $providerName)
         Info ("memory-lancedb-pro 和 lossless-claw 也已配置为 {0}" -f $providerName)
