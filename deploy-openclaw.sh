@@ -42,6 +42,8 @@ CONFIRM_BEFORE_PUBLISH=""
 FEISHU_ENABLED=false
 FEISHU_APP_ID=""
 FEISHU_APP_SECRET=""
+INSTALL_MEMORY_LANCEDB=true
+INSTALL_LOSSLESS_CLAW=true
 
 # ── 工具函数 ─────────────────────────────────────────────────
 print_banner() {
@@ -83,6 +85,101 @@ ask_yes_no() {
 
 check_command() {
     command -v "$1" &>/dev/null
+}
+
+copy_dir_contents() {
+    local src="$1"
+    local dest="$2"
+    mkdir -p "$dest"
+    cp -R "$src"/. "$dest"/
+}
+
+install_python_requirements() {
+    local target="$1"
+    local req_file="$2"
+    local pip_cmd=()
+
+    cd "$target"
+    "$PYTHON_CMD" -m venv .venv 2>/dev/null || true
+    if [ -x ".venv/bin/pip" ]; then
+        pip_cmd=(.venv/bin/pip)
+    else
+        pip_cmd=("$PYTHON_CMD" -m pip)
+    fi
+
+    if ! "${pip_cmd[@]}" install -r "$req_file"; then
+        fail "Python 依赖安装失败: $target/$req_file"
+        exit 1
+    fi
+    cd - > /dev/null
+}
+
+install_node_dependencies() {
+    local target="$1"
+    cd "$target"
+    if ! npm install; then
+        fail "Node.js 依赖安装失败: $target"
+        exit 1
+    fi
+    cd - > /dev/null
+}
+
+sync_openclaw_plugins_config() {
+    local config_path="$OPENCLAW_DIR/openclaw.json"
+
+    if [ ! -f "$config_path" ]; then
+        return
+    fi
+
+    "$PYTHON_CMD" - "$config_path" "$INSTALL_MEMORY_LANCEDB" "$INSTALL_LOSSLESS_CLAW" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+enable_memory = sys.argv[2].lower() == "true"
+enable_lossless = sys.argv[3].lower() == "true"
+
+data = json.loads(config_path.read_text(encoding="utf-8"))
+template_entries = json.loads(json.dumps(data.get("plugins", {}).get("entries", {})))
+plugins = data.setdefault("plugins", {})
+allow = [item for item in plugins.get("allow", []) if item not in {"memory-lancedb-pro", "lossless-claw"}]
+entries = plugins.setdefault("entries", {})
+slots = plugins.setdefault("slots", {})
+installs = plugins.setdefault("installs", {})
+load = plugins.setdefault("load", {})
+memory_path = str(Path.home() / ".openclaw" / "workspace" / "plugins" / "memory-lancedb-pro")
+load_paths = [path for path in load.get("paths", []) if path != memory_path]
+
+entries.pop("memory-lancedb-pro", None)
+entries.pop("lossless-claw", None)
+slots.pop("memory", None)
+slots.pop("contextEngine", None)
+installs.pop("lossless-claw", None)
+
+if enable_memory:
+    allow.append("memory-lancedb-pro")
+    slots["memory"] = "memory-lancedb-pro"
+    entries["memory-lancedb-pro"] = template_entries["memory-lancedb-pro"]
+    load_paths.append(memory_path)
+
+if enable_lossless:
+    allow.append("lossless-claw")
+    slots["contextEngine"] = "lossless-claw"
+    entries["lossless-claw"] = template_entries["lossless-claw"]
+    installs["lossless-claw"] = {
+        "source": "path",
+        "sourcePath": str(Path.home() / ".openclaw" / "workspace" / "plugins" / "lossless-claw-enhanced"),
+    }
+
+plugins["allow"] = allow
+load["paths"] = load_paths
+plugins["entries"] = entries
+plugins["slots"] = slots
+plugins["installs"] = installs
+
+config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
 }
 
 # ── 步骤 1: 检查系统环境 ──────────────────────────────────────
@@ -390,24 +487,28 @@ step8_clone_xiaolong_upload() {
     # 安装 Python 依赖
     if [ -f "$target/requirements.txt" ]; then
         info "正在安装 Python 依赖..."
-        cd "$target"
-        "$PYTHON_CMD" -m venv .venv 2>/dev/null || true
-        if [ -f ".venv/bin/pip" ]; then
-            .venv/bin/pip install -r requirements.txt -q
-        else
-            "$PYTHON_CMD" -m pip install -r requirements.txt -q 2>/dev/null || warn "依赖安装失败，请手动安装"
-        fi
-        cd - > /dev/null
+        install_python_requirements "$target" "requirements.txt"
         ok "Python 依赖已安装"
     fi
 
     # 安装 Node.js 依赖 (如果有 package.json)
     if [ -f "$target/package.json" ]; then
         info "正在安装 Node.js 依赖..."
-        cd "$target"
-        npm install --silent 2>/dev/null || warn "npm install 失败"
-        cd - > /dev/null
+        install_node_dependencies "$target"
         ok "Node.js 依赖已安装"
+    fi
+
+    echo ""
+    if ask_yes_no "是否将 xiaolong-upload 中的 Skills (auth, longxia-bootstrap, longxia-upload) 安装到 OpenClaw？" "y"; then
+        mkdir -p "$SKILLS_DIR"
+        for skill in "auth" "longxia-bootstrap" "longxia-upload"; do
+            if [ -d "$target/skills/$skill" ]; then
+                copy_dir_contents "$target/skills/$skill" "$SKILLS_DIR/$skill"
+                ok "Skill [$skill] 已安装并更新"
+            else
+                warn "在 xiaolong-upload 中找不到 Skill [$skill]"
+            fi
+        done
     fi
 }
 
@@ -435,14 +536,7 @@ step9_clone_openclaw_upload() {
     # 安装 Python 依赖
     if [ -f "$target/requirements.txt" ]; then
         info "正在安装 Python 依赖..."
-        cd "$target"
-        "$PYTHON_CMD" -m venv .venv 2>/dev/null || true
-        if [ -f ".venv/bin/pip" ]; then
-            .venv/bin/pip install -r requirements.txt -q
-        else
-            "$PYTHON_CMD" -m pip install -r requirements.txt -q 2>/dev/null || warn "依赖安装失败，请手动安装"
-        fi
-        cd - > /dev/null
+        install_python_requirements "$target" "requirements.txt"
         ok "Python 依赖已安装"
     fi
 
@@ -450,6 +544,14 @@ step9_clone_openclaw_upload() {
     mkdir -p "$target/logs"
     mkdir -p "$target/published"
     mkdir -p "$target/flash_longxia/output"
+    mkdir -p "$target/scripts"
+    if [ -f "$DEPLOY_DIR/scripts/cleanup_uploaded_videos.py" ]; then
+        cp "$DEPLOY_DIR/scripts/cleanup_uploaded_videos.py" "$target/scripts/cleanup_uploaded_videos.py"
+        chmod +x "$target/scripts/cleanup_uploaded_videos.py"
+        ok "视频清理脚本已安装"
+    else
+        warn "缺少视频清理脚本模板"
+    fi
     ok "目录结构已创建"
 
     # 生成 config.yaml（根据用户输入，清除本地 wechat_target）
@@ -509,6 +611,17 @@ content:
 $notify_section
 CONFIG_YAML_EOF
     ok "config.yaml 已生成 (wechat_target 留空，绑定微信后自动填写)"
+
+    echo ""
+    if ask_yes_no "是否将 openclaw_upload 中的 Skill (flash-longxia) 安装到 OpenClaw？" "y"; then
+        mkdir -p "$SKILLS_DIR"
+        if [ -d "$target/skills/flash-longxia" ]; then
+            copy_dir_contents "$target/skills/flash-longxia" "$SKILLS_DIR/flash-longxia"
+            ok "Skill [flash-longxia] 已安装并更新"
+        else
+            warn "在 openclaw_upload 中找不到 Skill [flash-longxia]"
+        fi
+    fi
 }
 
 # ── 步骤 10: 初始化 Workspace 配置文件 ────────────────────────
@@ -728,14 +841,14 @@ step11_install_skills() {
     step "安装 Skills（技能）"
 
     local skill_src="$DEPLOY_DIR/skills"
-    local skill_names=("flash-longxia" "auth" "longxia-upload" "longxia-bootstrap")
+    local skill_names=("flash-longxia" "auth" "longxia-upload" "longxia-bootstrap" "video-cleanup")
 
     for skill in "${skill_names[@]}"; do
         if [ -d "$skill_src/$skill" ]; then
             if [ -d "$SKILLS_DIR/$skill" ]; then
                 warn "Skill [$skill] 已存在，跳过"
             else
-                cp -r "$skill_src/$skill" "$SKILLS_DIR/$skill"
+                copy_dir_contents "$skill_src/$skill" "$SKILLS_DIR/$skill"
                 ok "Skill [$skill] 已安装"
             fi
         else
@@ -767,50 +880,60 @@ step12_configure_memory() {
     mkdir -p "$plugins_dir"
 
     # 克隆 memory-lancedb-pro
-    local mlp_dir="$plugins_dir/memory-lancedb-pro"
-    if [ -d "$mlp_dir" ]; then
-        ok "memory-lancedb-pro 已存在"
-        if ask_yes_no "是否拉取最新代码？"; then
-            cd "$mlp_dir"
-            git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
-            cd "$DEPLOY_DIR"
+    echo ""
+    if ask_yes_no "是否安装 memory-lancedb-pro (高级记忆插件)？" "y"; then
+        local mlp_dir="$plugins_dir/memory-lancedb-pro"
+        if [ -d "$mlp_dir" ]; then
+            ok "memory-lancedb-pro 已存在"
+            if ask_yes_no "是否拉取最新代码？"; then
+                cd "$mlp_dir"
+                git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
+                cd "$DEPLOY_DIR"
+            fi
+        else
+            info "正在克隆 memory-lancedb-pro..."
+            git clone https://github.com/CortexReach/memory-lancedb-pro.git "$mlp_dir"
+            ok "memory-lancedb-pro 克隆完成"
+        fi
+        if [ -f "$mlp_dir/package.json" ]; then
+            info "安装 memory-lancedb-pro 依赖..."
+            install_node_dependencies "$mlp_dir"
+            ok "依赖安装完成"
         fi
     else
-        info "正在克隆 memory-lancedb-pro..."
-        git clone https://github.com/CortexReach/memory-lancedb-pro.git "$mlp_dir"
-        ok "memory-lancedb-pro 克隆完成"
-    fi
-    # 安装依赖（如果有 package.json）
-    if [ -f "$mlp_dir/package.json" ]; then
-        info "安装 memory-lancedb-pro 依赖..."
-        cd "$mlp_dir" && npm install --production 2>/dev/null && cd "$DEPLOY_DIR"
-        ok "依赖安装完成"
+        INSTALL_MEMORY_LANCEDB=false
+        info "跳过安装 memory-lancedb-pro"
     fi
 
     # 克隆 lossless-claw-enhanced
-    local lc_dir="$plugins_dir/lossless-claw-enhanced"
-    if [ -d "$lc_dir" ]; then
-        ok "lossless-claw-enhanced 已存在"
-        if ask_yes_no "是否拉取最新代码？"; then
-            cd "$lc_dir"
-            git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
-            cd "$DEPLOY_DIR"
+    echo ""
+    if ask_yes_no "是否安装 lossless-claw-enhanced (上下文无损压缩插件)？" "y"; then
+        local lc_dir="$plugins_dir/lossless-claw-enhanced"
+        if [ -d "$lc_dir" ]; then
+            ok "lossless-claw-enhanced 已存在"
+            if ask_yes_no "是否拉取最新代码？"; then
+                cd "$lc_dir"
+                git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
+                cd "$DEPLOY_DIR"
+            fi
+        else
+            info "正在克隆 lossless-claw-enhanced..."
+            git clone https://github.com/win4r/lossless-claw-enhanced.git "$lc_dir"
+            ok "lossless-claw-enhanced 克隆完成"
+        fi
+        if [ -f "$lc_dir/package.json" ]; then
+            info "安装 lossless-claw-enhanced 依赖..."
+            install_node_dependencies "$lc_dir"
+            ok "依赖安装完成"
         fi
     else
-        info "正在克隆 lossless-claw-enhanced..."
-        git clone https://github.com/win4r/lossless-claw-enhanced.git "$lc_dir"
-        ok "lossless-claw-enhanced 克隆完成"
-    fi
-    # 安装依赖（如果有 package.json）
-    if [ -f "$lc_dir/package.json" ]; then
-        info "安装 lossless-claw-enhanced 依赖..."
-        cd "$lc_dir" && npm install --production 2>/dev/null && cd "$DEPLOY_DIR"
-        ok "依赖安装完成"
+        INSTALL_LOSSLESS_CLAW=false
+        info "跳过安装 lossless-claw-enhanced"
     fi
 
-    info "插件路径已写入 openclaw.json (load.paths + installs)"
-    info "首次启动将自动初始化向量数据库"
-    ok "Memory / Context 插件安装完成"
+    sync_openclaw_plugins_config
+    info "插件配置已与 openclaw.json 同步"
+    ok "Memory / Context 操作完成"
 }
 
 # ── 步骤 13: 创建定时任务 ─────────────────────────────────────
@@ -887,7 +1010,7 @@ step13_create_cron() {
       "wakeMode": "now",
       "payload": {
         "kind": "systemEvent",
-        "text": "执行视频清理技能：cd ~/.openclaw/workspace/xiaolong-upload && $PYTHON_CMD scripts/cleanup_uploaded_videos.py"
+        "text": "执行视频清理任务：cd ~/.openclaw/workspace/openclaw_upload && $PYTHON_CMD scripts/cleanup_uploaded_videos.py --workspace-root ~/.openclaw/workspace --project-root ~/.openclaw/workspace/openclaw_upload"
       },
       "state": { "consecutiveErrors": 0 }
     }
@@ -966,6 +1089,7 @@ verify_deployment() {
         "$WORKSPACE_DIR/TOOLS.md:工具配置"
         "$OPENCLAW_DIR/cron/jobs.json:定时任务"
         "$WORKSPACE_DIR/openclaw_upload/flash_longxia/config.yaml:视频配置"
+        "$WORKSPACE_DIR/openclaw_upload/scripts/cleanup_uploaded_videos.py:视频清理脚本"
     )
 
     for item in "${check_files[@]}"; do
@@ -995,7 +1119,7 @@ verify_deployment() {
         fi
     done
 
-    local check_skills=("flash-longxia" "auth" "longxia-upload" "longxia-bootstrap")
+    local check_skills=("flash-longxia" "auth" "longxia-upload" "longxia-bootstrap" "video-cleanup")
     for skill in "${check_skills[@]}"; do
         if [ -d "$SKILLS_DIR/$skill" ]; then
             ok "Skill [$skill]: ✓"

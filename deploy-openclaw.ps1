@@ -32,6 +32,8 @@ $ConfirmBeforePublish = ""
 $FeishuEnabled = $false
 $FeishuAppId = ""
 $FeishuAppSecret = ""
+$InstallMemoryLancedb = $true
+$InstallLosslessClaw = $true
 
 # ── 工具函数 ─────────────────────────────────────────────────
 function Print-Banner {
@@ -77,6 +79,16 @@ function Ensure-Dir([string]$path) {
     }
 }
 
+function Copy-DirContents {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    Ensure-Dir $Destination
+    Get-ChildItem -Path $Source -Force | Copy-Item -Destination $Destination -Recurse -Force
+}
+
 # 执行 Python 命令的辅助函数（解决 "py -3.12" 空格问题）
 function Invoke-Python {
     param([string[]]$Arguments)
@@ -86,6 +98,80 @@ function Invoke-Python {
     } else {
         & $script:PythonCmd @Arguments
     }
+}
+
+function Install-PythonRequirements {
+    param(
+        [string]$Target,
+        [string]$RequirementsFile = "requirements.txt"
+    )
+
+    Push-Location $Target
+    Invoke-Python @("-m", "venv", ".venv")
+    $pipExe = Join-Path $Target ".venv\Scripts\pip.exe"
+    if (Test-Path $pipExe) {
+        & $pipExe install -r $RequirementsFile
+    } else {
+        Invoke-Python @("-m", "pip", "install", "-r", $RequirementsFile)
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Fail ("Python 依赖安装失败: {0}\{1}" -f $Target, $RequirementsFile)
+        exit 1
+    }
+    Pop-Location
+}
+
+function Install-NodeDependencies {
+    param([string]$Target)
+
+    Push-Location $Target
+    & npm install
+    if ($LASTEXITCODE -ne 0) {
+        Fail ("Node.js 依赖安装失败: {0}" -f $Target)
+        exit 1
+    }
+    Pop-Location
+}
+
+function Sync-OpenClawPluginsConfig {
+    $configPath = Join-Path $OpenClawDir "openclaw.json"
+    if (-not (Test-Path $configPath)) {
+        return
+    }
+
+    $json = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 100
+    $templateMemoryEntry = $json.plugins.entries."memory-lancedb-pro"
+    $templateLosslessEntry = $json.plugins.entries."lossless-claw"
+    $plugins = $json.plugins
+    $plugins.allow = @($plugins.allow | Where-Object { $_ -notin @("memory-lancedb-pro", "lossless-claw") })
+    $plugins.entries.PSObject.Properties.Remove("memory-lancedb-pro")
+    $plugins.entries.PSObject.Properties.Remove("lossless-claw")
+    $plugins.slots.PSObject.Properties.Remove("memory")
+    $plugins.slots.PSObject.Properties.Remove("contextEngine")
+    $plugins.installs.PSObject.Properties.Remove("lossless-claw")
+
+    $memoryPath = (Join-Path $WorkspaceDir "plugins\memory-lancedb-pro").Replace("\", "/")
+    $plugins.load.paths = @($plugins.load.paths | Where-Object { $_ -ne $memoryPath })
+
+    if ($script:InstallMemoryLancedb) {
+        $plugins.allow += "memory-lancedb-pro"
+        $plugins.entries | Add-Member -NotePropertyName "memory-lancedb-pro" -NotePropertyValue $templateMemoryEntry -Force
+        $plugins.slots | Add-Member -NotePropertyName "memory" -NotePropertyValue "memory-lancedb-pro" -Force
+        $plugins.load.paths += $memoryPath
+    }
+
+    if ($script:InstallLosslessClaw) {
+        $plugins.allow += "lossless-claw"
+        $plugins.entries | Add-Member -NotePropertyName "lossless-claw" -NotePropertyValue $templateLosslessEntry -Force
+        $plugins.slots | Add-Member -NotePropertyName "contextEngine" -NotePropertyValue "lossless-claw" -Force
+        $plugins.installs | Add-Member -NotePropertyName "lossless-claw" -NotePropertyValue @{
+            source = "path"
+            sourcePath = (Join-Path $WorkspaceDir "plugins\lossless-claw-enhanced").Replace("\", "/")
+        } -Force
+    }
+
+    $content = $json | ConvertTo-Json -Depth 100
+    [System.IO.File]::WriteAllText($configPath, $content + "`n", [System.Text.Encoding]::UTF8)
 }
 
 # ── 步骤 1: 检查系统环境 ─────────────────────────────────────
@@ -362,14 +448,24 @@ function Step8-CloneXiaolongUpload {
     $reqFile = Join-Path $target "requirements.txt"
     if (Test-Path $reqFile) {
         Info "正在安装 Python 依赖..."
-        Push-Location $target
-        Invoke-Python @("-m", "venv", ".venv")
-        $pipExe = Join-Path $target ".venv\Scripts\pip.exe"
-        if (Test-Path $pipExe) {
-            & $pipExe install -r requirements.txt -q 2>$null
-        }
-        Pop-Location
+        Install-PythonRequirements -Target $target -RequirementsFile "requirements.txt"
         OK "依赖已安装"
+    }
+
+    Write-Host ""
+    if (Ask-YesNo "是否将 xiaolong-upload 中的 Skills (auth, longxia-bootstrap, longxia-upload) 安装到 OpenClaw？") {
+        if (-not (Test-Path $SkillsDir)) { New-Item -ItemType Directory -Path $SkillsDir | Out-Null }
+        $skills = @("auth", "longxia-bootstrap", "longxia-upload")
+        foreach ($skill in $skills) {
+            $srcSkill = Join-Path $target "skills\$skill"
+            $destSkill = Join-Path $SkillsDir $skill
+            if (Test-Path $srcSkill) {
+                Copy-DirContents -Source $srcSkill -Destination $destSkill
+                OK "Skill [$skill] 已安装并更新"
+            } else {
+                Warn "在 xiaolong-upload 中找不到 Skill [$skill]"
+            }
+        }
     }
 }
 
@@ -398,19 +494,21 @@ function Step9-CloneOpenclawUpload {
     $reqFile = Join-Path $target "requirements.txt"
     if (Test-Path $reqFile) {
         Info "正在安装 Python 依赖..."
-        Push-Location $target
-        Invoke-Python @("-m", "venv", ".venv")
-        $pipExe = Join-Path $target ".venv\Scripts\pip.exe"
-        if (Test-Path $pipExe) {
-            & $pipExe install -r requirements.txt -q 2>$null
-        }
-        Pop-Location
+        Install-PythonRequirements -Target $target -RequirementsFile "requirements.txt"
         OK "依赖已安装"
     }
 
     # 创建目录
-    foreach ($sub in @("cookies", "logs", "published", "flash_longxia\output")) {
+    foreach ($sub in @("cookies", "logs", "published", "flash_longxia\output", "scripts")) {
         Ensure-Dir (Join-Path $target $sub)
+    }
+    $cleanupScriptSrc = Join-Path $DeployDir "scripts\cleanup_uploaded_videos.py"
+    $cleanupScriptDst = Join-Path $target "scripts\cleanup_uploaded_videos.py"
+    if (Test-Path $cleanupScriptSrc) {
+        Copy-Item -Path $cleanupScriptSrc -Destination $cleanupScriptDst -Force
+        OK "视频清理脚本已安装"
+    } else {
+        Warn "缺少视频清理脚本模板"
     }
 
     # 生成 config.yaml（不用 here-string，用数组拼接避免引号问题）
@@ -462,6 +560,19 @@ function Step9-CloneOpenclawUpload {
     $configPath = Join-Path $target "flash_longxia\config.yaml"
     $lines -join "`n" | Set-Content $configPath -Encoding UTF8 -NoNewline
     OK "config.yaml 已生成"
+
+    Write-Host ""
+    if (Ask-YesNo "是否将 openclaw_upload 中的 Skill (flash-longxia) 安装到 OpenClaw？") {
+        if (-not (Test-Path $SkillsDir)) { New-Item -ItemType Directory -Path $SkillsDir | Out-Null }
+        $srcSkill = Join-Path $target "skills\flash-longxia"
+        $destSkill = Join-Path $SkillsDir "flash-longxia"
+        if (Test-Path $srcSkill) {
+            Copy-DirContents -Source $srcSkill -Destination $destSkill
+            OK "Skill [flash-longxia] 已安装并更新"
+        } else {
+            Warn "在 openclaw_upload 中找不到 Skill [flash-longxia]"
+        }
+    }
 }
 
 # ── 步骤 10: Workspace 配置 ──────────────────────────────────
@@ -621,21 +732,20 @@ function Step10-WorkspaceConfig {
     }
 }
 
-# ── 步骤 11: 安装 Skills ─────────────────────────────────────
+# ── 步骤 11: 安装本地 Skills（备用）──────────────────────────────
 function Step11-InstallSkills {
-    Step "安装 Skills（技能）"
+    Step "安装本地 Skills（技能后备）"
 
-    $skillNames = @("flash-longxia", "auth", "longxia-upload", "longxia-bootstrap")
+    $skillNames = @("flash-longxia", "auth", "longxia-upload", "longxia-bootstrap", "video-cleanup")
     foreach ($skill in $skillNames) {
         $src = Join-Path $DeployDir "skills\$skill"
         $dst = Join-Path $SkillsDir $skill
         if ((Test-Path $src) -and -not (Test-Path $dst)) {
-            Copy-Item -Path $src -Destination $dst -Recurse
-            OK "Skill [$skill] 已安装"
+            Info "从部署包复制后备 Skill [$skill]"
+            Copy-DirContents -Source $src -Destination $dst
+            OK "本地 Skill [$skill] 已安装"
         } elseif (Test-Path $dst) {
-            Warn "Skill [$skill] 已存在，跳过"
-        } else {
-            Warn "Skill [$skill] 模板不存在"
+            Info "Skill [$skill] 已存在（通常来自网络仓库更新），跳过本地覆盖"
         }
     }
 
@@ -649,16 +759,70 @@ function Step11-InstallSkills {
     }
 }
 
-# ── 步骤 12: 配置 Memory ─────────────────────────────────────
+# ── 步骤 12: 安装 Memory / Context 插件 ─────────────────────
 function Step12-ConfigureMemory {
-    Step "配置 Memory 插件"
+    Step "安装 Memory / Context 插件"
 
     Ensure-Dir (Join-Path $OpenClawDir "memory")
     Ensure-Dir (Join-Path $WorkspaceDir "memory")
     Ensure-Dir (Join-Path $OpenClawDir "memory-md")
+    
+    $pluginsDir = Join-Path $WorkspaceDir "plugins"
+    Ensure-Dir $pluginsDir
 
-    Info "插件配置已写入 openclaw.json，启动时自动下载"
-    OK "Memory 目录已创建"
+    Write-Host ""
+    if (Ask-YesNo "是否安装 memory-lancedb-pro (高级记忆插件)？") {
+        $mlpDir = Join-Path $pluginsDir "memory-lancedb-pro"
+        if (Test-Path $mlpDir) {
+            OK "memory-lancedb-pro 已存在"
+            if (Ask-YesNo "是否拉取最新代码？") {
+                Push-Location $mlpDir
+                & git pull origin main 2>$null
+                if ($LASTEXITCODE -ne 0) { & git pull origin master 2>$null }
+                Pop-Location
+            }
+        } else {
+            Info "正在克隆 memory-lancedb-pro..."
+            & git clone "https://github.com/CortexReach/memory-lancedb-pro.git" $mlpDir
+            OK "memory-lancedb-pro 克隆完成"
+        }
+        if (Test-Path (Join-Path $mlpDir "package.json")) {
+            Info "安装 memory-lancedb-pro 依赖..."
+            Install-NodeDependencies -Target $mlpDir
+            OK "依赖安装完成"
+        }
+    } else {
+        $script:InstallMemoryLancedb = $false
+    }
+
+    Write-Host ""
+    if (Ask-YesNo "是否安装 lossless-claw-enhanced (上下文无损压缩插件)？") {
+        $lcDir = Join-Path $pluginsDir "lossless-claw-enhanced"
+        if (Test-Path $lcDir) {
+            OK "lossless-claw-enhanced 已存在"
+            if (Ask-YesNo "是否拉取最新代码？") {
+                Push-Location $lcDir
+                & git pull origin main 2>$null
+                if ($LASTEXITCODE -ne 0) { & git pull origin master 2>$null }
+                Pop-Location
+            }
+        } else {
+            Info "正在克隆 lossless-claw-enhanced..."
+            & git clone "https://github.com/win4r/lossless-claw-enhanced.git" $lcDir
+            OK "lossless-claw-enhanced 克隆完成"
+        }
+        if (Test-Path (Join-Path $lcDir "package.json")) {
+            Info "安装 lossless-claw-enhanced 依赖..."
+            Install-NodeDependencies -Target $lcDir
+            OK "依赖安装完成"
+        }
+    } else {
+        $script:InstallLosslessClaw = $false
+    }
+
+    Sync-OpenClawPluginsConfig
+    Info "插件配置已与 openclaw.json 同步"
+    OK "Memory / Context 操作完成"
 }
 
 # ── 步骤 13: 创建定时任务 ────────────────────────────────────
@@ -689,6 +853,9 @@ function Step13-CreateCron {
     $id2 = [guid]::NewGuid().ToString()
     $loginExpr = ("{0} {1} * * *" -f $loginParts[1], $loginParts[0])
     $cleanupExpr = ("{0} {1} * * {2}" -f $cleanupParts[1], $cleanupParts[0], $cleanupDay)
+    $pyFullCmd = ($PythonCmd + " " + ($PythonArgs -join " ")).Trim()
+    $xiaolongDir = (Join-Path $WorkspaceDir "xiaolong-upload").Replace("\", "/")
+    $uploadDir = (Join-Path $WorkspaceDir "openclaw_upload").Replace("\", "/")
 
     # 用字符串拼接 JSON（避免 ConvertTo-Json 的嵌套深度和格式问题）
     $cronJson = @"
@@ -706,7 +873,7 @@ function Step13-CreateCron {
       "schedule": {"kind": "cron", "expr": "$loginExpr", "tz": "Asia/Shanghai"},
       "sessionTarget": "main",
       "wakeMode": "now",
-      "payload": {"kind": "systemEvent", "text": "执行每日平台登录状态检查"},
+      "payload": {"kind": "systemEvent", "text": "执行每日平台登录状态检查：cd $xiaolongDir && $pyFullCmd skills/auth/scripts/scheduled_login_check.py"},
       "state": {"consecutiveErrors": 0}
     },
     {
@@ -720,7 +887,7 @@ function Step13-CreateCron {
       "schedule": {"expr": "$cleanupExpr", "kind": "cron", "tz": "Asia/Shanghai"},
       "sessionTarget": "main",
       "wakeMode": "now",
-      "payload": {"kind": "systemEvent", "text": "执行视频清理技能"},
+      "payload": {"kind": "systemEvent", "text": "执行视频清理任务：cd $uploadDir && $pyFullCmd scripts/cleanup_uploaded_videos.py --workspace-root $WorkspaceDir --project-root $uploadDir"},
       "state": {"consecutiveErrors": 0}
     }
   ]
@@ -786,7 +953,8 @@ function Verify-Deployment {
         @((Join-Path $WorkspaceDir "SOUL.md"), "AI灵魂"),
         @((Join-Path $WorkspaceDir "USER.md"), "用户偏好"),
         @((Join-Path $WorkspaceDir "IDENTITY.md"), "AI身份"),
-        @((Join-Path $OpenClawDir "cron\jobs.json"), "定时任务")
+        @((Join-Path $OpenClawDir "cron\jobs.json"), "定时任务"),
+        @((Join-Path $WorkspaceDir "openclaw_upload\scripts\cleanup_uploaded_videos.py"), "视频清理脚本")
     )
 
     foreach ($item in $checkFiles) {
@@ -801,6 +969,12 @@ function Verify-Deployment {
     foreach ($item in $checkDirs) {
         if (Test-Path $item[0]) { OK ("{0}: OK" -f $item[1]) }
         else { Fail ("{0}: 缺失" -f $item[1]) }
+    }
+
+    $checkSkills = @("flash-longxia", "auth", "longxia-upload", "longxia-bootstrap", "video-cleanup")
+    foreach ($skill in $checkSkills) {
+        if (Test-Path (Join-Path $SkillsDir $skill)) { OK ("Skill [{0}]: OK" -f $skill) }
+        else { Warn ("Skill [{0}]: 缺失" -f $skill) }
     }
 
     Write-Host ""

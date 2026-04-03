@@ -26,7 +26,8 @@ deploy-openclaw/
     ├── flash-longxia/          # 图片生成视频
     ├── auth/                   # 平台登录管理
     ├── longxia-upload/         # 视频发布
-    └── longxia-bootstrap/      # 项目引导
+    ├── longxia-bootstrap/      # 项目引导
+    └── video-cleanup/          # 视频清理
 ```
 
 ## 🚀 快速开始
@@ -54,7 +55,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 .\deploy-openclaw.ps1
 ```
 
-## 📋 部署步骤概览（13 步）
+## 📋 部署步骤概览（14 步）
 
 | # | 步骤 | 说明 |
 |---|------|------|
@@ -67,10 +68,11 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 | 7 | xiaolong-upload | 克隆图生视频项目 |
 | 8 | openclaw_upload | 克隆视频发布项目 |
 | 9 | Workspace 配置 | 复制 7 个核心 md 文件 |
-| 10 | Skills 安装 | 4 个技能安装到位 |
+| 10 | Skills 安装 | 5 个技能安装到位 |
 | 11 | Memory 插件 | 向量记忆初始化 |
 | 12 | 定时任务 | 登录检查 + 视频清理 |
 | 13 | Token + 微信 | 配置推送通道 |
+| 14 | 部署验证 | 核对关键文件与脚本 |
 
 ## ⚙️ 部署前准备
 
