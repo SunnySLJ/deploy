@@ -108,12 +108,27 @@ def _save_config(data: dict) -> None:
     )
 
 
+def _iter_configured_roots(config: dict) -> list[str]:
+    values: list[str] = []
+    project_root = str(config.get("project_root", "")).strip()
+    if project_root:
+        values.append(project_root)
+    raw_candidates = config.get("project_root_candidates", [])
+    if isinstance(raw_candidates, list):
+        for item in raw_candidates:
+            candidate = str(item).strip()
+            if candidate:
+                values.append(candidate)
+    return values
+
+
 def _candidate_roots() -> list[Path]:
     seen: set[str] = set()
     candidates: list[Path] = []
+    config = _load_config()
     for raw in (
         os.environ.get("XIAOLONG_UPLOAD_ROOT", ""),
-        _load_config().get("project_root", ""),
+        *_iter_configured_roots(config),
         str(Path.cwd()),
         str(Path.home() / ".openclaw" / "workspace" / "xiaolong-upload"),
         str(Path.home() / "Desktop" / "xiaolong-upload"),
@@ -186,6 +201,7 @@ def cmd_status(_: argparse.Namespace) -> int:
     print(f"python_cmd: {_python_cmd_str(python_cmd)}")
     print(f"config: {CONFIG_PATH}")
     print(f"configured_project_root: {config.get('project_root', '')}")
+    print(f"configured_project_root_candidates: {config.get('project_root_candidates', [])}")
     print(f"configured_python_cmd: {config.get('python_cmd', '')}")
     print(f"detected_project_root: {root or ''}")
     if root is None:

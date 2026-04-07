@@ -334,6 +334,7 @@ scripts/
 其中会写入：
 
 - `project_root`
+- `project_root_candidates`
 - `python_cmd`
 
 > 即使你在步骤 8 和步骤 9 里选择了安装技能，步骤 11 仍会执行一次“补齐”。已存在的技能不会被覆盖。

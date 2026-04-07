@@ -15,7 +15,7 @@ description: Bootstrap 技能。当用户提到“初始化项目”“配置项
 
 ## 目标
 
-1. 持久化项目根目录。
+1. 持久化项目根目录或候选目录。
 2. 持久化 Python 3.12 命令。
 3. 检查依赖是否齐全。
 4. 代理调用当前仓库的登录检查和视频号发布入口。
@@ -37,7 +37,7 @@ description: Bootstrap 技能。当用户提到“初始化项目”“配置项
 设置项目根目录：
 
 ```bash
-/opt/homebrew/bin/python3.12 skills/longxia-bootstrap/scripts/bootstrap.py set-root /Users/mima0000/.openclaw/workspace/xiaolong-upload
+/opt/homebrew/bin/python3.12 skills/longxia-bootstrap/scripts/bootstrap.py set-root ~/.openclaw/workspace/xiaolong-upload
 ```
 
 设置 Python 3.12：
@@ -86,6 +86,6 @@ description: Bootstrap 技能。当用户提到“初始化项目”“配置项
 
 1. 首次使用先执行 `status`。
 2. 若 Python 3.12 未配置，先执行 `set-python`。
-3. 若项目根目录未配置，先执行 `set-root`。
+3. 若自动发现不到项目根目录，再执行 `set-root`。
 4. 若依赖缺失，再执行 `install-deps`。
 5. 若用户只是要同步源码，先检查工作区是否干净；不干净就停住并说明原因。

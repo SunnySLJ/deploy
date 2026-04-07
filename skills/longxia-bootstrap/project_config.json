@@ -1,4 +1,9 @@
 {
-  "project_root": "/Users/mima0000/.openclaw/workspace/xiaolong-upload",
-  "python_cmd": "/opt/homebrew/bin/python3.12"
+  "project_root": "",
+  "project_root_candidates": [
+    "~/.openclaw/workspace/xiaolong-upload",
+    "~/Desktop/xiaolong-upload",
+    "~/source/xiaolong-upload"
+  ],
+  "python_cmd": ""
 }

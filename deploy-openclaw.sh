@@ -882,7 +882,11 @@ step11_install_skills() {
     if [ -f "$bootstrap_config" ]; then
         cat > "$bootstrap_config" << BOOTSTRAP_EOF
 {
-  "project_root": "$WORKSPACE_DIR/xiaolong-upload",
+  "project_root": "",
+  "project_root_candidates": [
+    "~/.openclaw/workspace/xiaolong-upload",
+    "$WORKSPACE_DIR/xiaolong-upload"
+  ],
   "python_cmd": "$PYTHON_CMD"
 }
 BOOTSTRAP_EOF

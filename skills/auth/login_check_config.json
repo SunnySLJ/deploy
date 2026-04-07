@@ -28,6 +28,9 @@
   
   "auto_retry_login": true,
   "_comment_auto_retry_login": "是否自动尝试恢复登录会话（重启浏览器等）",
+
+  "max_relogin_per_day": 5,
+  "_comment_max_relogin_per_day": "单个平台每天最多触发几次自动恢复/提醒，超过后当天跳过",
   
   "qr_code_notify": true,
   "_comment_qr_code_notify": "自动恢复失败时是否发送二维码让用户扫码",
