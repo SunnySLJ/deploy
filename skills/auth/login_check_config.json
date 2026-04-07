@@ -11,20 +11,14 @@
   "_comment_timezone": "时区设置",
   
   "platforms": [
-    "douyin",
-    "xiaohongshu",
-    "kuaishou",
     "shipinhao"
   ],
-  "_comment_platforms": "需要检查的平台列表：douyin(抖音), xiaohongshu(小红书), kuaishou(快手), shipinhao(视频号)",
+  "_comment_platforms": "需要检查的平台列表：douyin(抖音), xiaohongshu(小红书), kuaishou(快手), shipinhao(视频号) - 当前仅检查视频号",
   
   "check_order": [
-    "douyin",
-    "xiaohongshu",
-    "kuaishou",
     "shipinhao"
   ],
-  "_comment_check_order": "检查顺序，按顺序逐个检查",
+  "_comment_check_order": "检查顺序，按顺序逐个检查 - 当前仅检查视频号",
   
   "notify_on_failure": true,
   "_comment_notify_on_failure": "登录失效时是否发送通知",
