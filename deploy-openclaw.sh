@@ -353,6 +353,17 @@ step6_personalize() {
     read -rp "  你所在的行业？(例: 美妆、科技、美食、教育、宠物): " USER_INDUSTRY
     USER_INDUSTRY="${USER_INDUSTRY:-通用}"
 
+    read -rp "  默认行业模板？(留空=按行业自动匹配，输入 0=不使用模板，例: 美妆护肤、食品饮料): " USER_INDUSTRY_TEMPLATE
+    if [ -z "$USER_INDUSTRY_TEMPLATE" ]; then
+        USER_INDUSTRY_TEMPLATE_ENABLED="true"
+        USER_INDUSTRY_TEMPLATE="$USER_INDUSTRY"
+    elif [ "$USER_INDUSTRY_TEMPLATE" = "0" ]; then
+        USER_INDUSTRY_TEMPLATE_ENABLED="false"
+        USER_INDUSTRY_TEMPLATE=""
+    else
+        USER_INDUSTRY_TEMPLATE_ENABLED="true"
+    fi
+
     read -rp "  你的视频风格？(例: 可爱风、科技感、文艺、搞笑、治愈): " USER_VIDEO_STYLE
     USER_VIDEO_STYLE="${USER_VIDEO_STYLE:-通用}"
 
@@ -388,7 +399,11 @@ step6_personalize() {
     AI_SOUL_STYLE="${AI_SOUL_STYLE:-1}"
 
     ok "个性化配置完成: $USER_DISPLAY_NAME / $AI_NAME $AI_EMOJI"
-    ok "行业: $USER_INDUSTRY | 视频风格: $USER_VIDEO_STYLE"
+    if [ "$USER_INDUSTRY_TEMPLATE_ENABLED" = "true" ]; then
+        ok "行业: $USER_INDUSTRY | 行业模板: $USER_INDUSTRY_TEMPLATE | 视频风格: $USER_VIDEO_STYLE"
+    else
+        ok "行业: $USER_INDUSTRY | 行业模板: 已关闭 | 视频风格: $USER_VIDEO_STYLE"
+    fi
 }
 
 # ── 步骤 7: 配置 LLM 大模型 ───────────────────────────────────
@@ -604,6 +619,9 @@ video:
 # 用户视频风格（AI 生成标题和文案时参考）
 content:
   industry: "$USER_INDUSTRY"
+  industry_template:
+    enabled: $USER_INDUSTRY_TEMPLATE_ENABLED
+    name: "$USER_INDUSTRY_TEMPLATE"
   video_style: "$USER_VIDEO_STYLE"
   auto_generate_title: true        # 发布前自动根据风格生成标题
   auto_generate_description: true  # 发布前自动根据风格生成文案
@@ -788,6 +806,7 @@ SOUL1_EOF
 - **称呼**: $USER_DISPLAY_NAME
 - **时区**: Asia/Shanghai
 - **行业**: $USER_INDUSTRY
+- **默认行业模板**: ${USER_INDUSTRY_TEMPLATE:-未启用}
 
 ## 视频创作偏好
 
