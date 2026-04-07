@@ -945,6 +945,94 @@ function Step14-ConfigureToken {
     }
 }
 
+# ── 生成 Skill 更新脚本 ───────────────────────────────────────
+function Setup-SkillUpdater {
+    $updateScript = @'
+param(
+    [string]$Workspace = "$HOME/.openclaw/workspace",
+    [string]$SkillsDir = "$HOME/.openclaw/skills"
+)
+
+$ErrorActionPreference = "Stop"
+
+function Copy-DirContents {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    Get-ChildItem -Path $Source -Force | ForEach-Object {
+        $target = Join-Path $Destination $_.Name
+        Copy-Item $_.FullName $target -Recurse -Force
+    }
+}
+
+function Update-Repo {
+    param([Parameter(Mandatory = $true)][string]$RepoName)
+
+    $repoDir = Join-Path $Workspace $RepoName
+    if (-not (Test-Path (Join-Path $repoDir ".git"))) {
+        Write-Host ("  ⚠️ 跳过 {0}: 未找到 git 仓库" -f $RepoName)
+        return $false
+    }
+
+    Write-Host ("  📦 更新 {0}..." -f $RepoName)
+    Push-Location $repoDir
+    try {
+        & git pull origin main 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            & git pull origin master 2>$null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ("  ⚠️ {0} 更新失败" -f $RepoName)
+            return $false
+        }
+    } finally {
+        Pop-Location
+    }
+
+    return $true
+}
+
+function Sync-Skill {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoName,
+        [Parameter(Mandatory = $true)][string]$SkillName
+    )
+
+    $source = Join-Path $Workspace (Join-Path $RepoName "skills\$SkillName")
+    $destination = Join-Path $SkillsDir $SkillName
+
+    if (-not (Test-Path $source)) {
+        Write-Host ("  ⚠️ 跳过 Skill [{0}]: {1} 中不存在" -f $SkillName, $RepoName)
+        return
+    }
+
+    Copy-DirContents -Source $source -Destination $destination
+    Write-Host ("  ✅ Skill [{0}] 已同步" -f $SkillName)
+}
+
+Write-Host "🔄 正在更新 skill 代码..."
+
+if (Update-Repo -RepoName "xiaolong-upload") {
+    Sync-Skill -RepoName "xiaolong-upload" -SkillName "auth"
+    Sync-Skill -RepoName "xiaolong-upload" -SkillName "longxia-bootstrap"
+    Sync-Skill -RepoName "xiaolong-upload" -SkillName "longxia-upload"
+}
+
+if (Update-Repo -RepoName "openclaw_upload") {
+    Sync-Skill -RepoName "openclaw_upload" -SkillName "flash-longxia"
+}
+
+Write-Host "✅ Skill 代码更新与同步完成！"
+'@
+
+    $updateScriptPath = Join-Path $WorkspaceDir "update-skills.ps1"
+    [System.IO.File]::WriteAllText($updateScriptPath, $updateScript, [System.Text.Encoding]::UTF8)
+    OK "update-skills.ps1 已生成"
+}
+
 # ── 部署验证 ─────────────────────────────────────────────────
 function Verify-Deployment {
     Write-Host ""
@@ -1016,6 +1104,7 @@ function Main {
             Step9-CloneOpenclawUpload; Step10-WorkspaceConfig
             Step11-InstallSkills; Step12-ConfigureMemory
             Step13-CreateCron; Step14-ConfigureToken
+            Setup-SkillUpdater
             Verify-Deployment
         }
         "2" {
@@ -1025,7 +1114,8 @@ function Main {
             Step8-CloneXiaolongUpload; Step9-CloneOpenclawUpload
             Step10-WorkspaceConfig; Step11-InstallSkills
             Step12-ConfigureMemory; Step13-CreateCron
-            Step14-ConfigureToken; Verify-Deployment
+            Step14-ConfigureToken; Setup-SkillUpdater
+            Verify-Deployment
         }
         default {
             Fail "无效选择"

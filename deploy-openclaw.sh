@@ -1166,18 +1166,63 @@ setup_skill_updater() {
     cat > "$WORKSPACE_DIR/update-skills.sh" << 'UPDATE_EOF'
 #!/bin/bash
 # Skill 代码同步脚本
-set -e
+set -euo pipefail
 echo "🔄 正在更新 skill 代码..."
 WORKSPACE="$HOME/.openclaw/workspace"
-for repo in xiaolong-upload openclaw_upload; do
-    if [ -d "$WORKSPACE/$repo/.git" ]; then
-        echo "  📦 $repo..."
-        cd "$WORKSPACE/$repo"
-        git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || echo "  ⚠️ 更新失败"
-        cd - > /dev/null
+SKILLS_DIR="$HOME/.openclaw/skills"
+
+copy_dir_contents() {
+    local src="$1"
+    local dst="$2"
+    mkdir -p "$dst"
+    cp -R "$src"/. "$dst"/
+}
+
+update_repo() {
+    local repo="$1"
+    local repo_dir="$WORKSPACE/$repo"
+
+    if [ ! -d "$repo_dir/.git" ]; then
+        echo "  ⚠️ 跳过 $repo：未找到 git 仓库"
+        return 1
     fi
-done
-echo "✅ Skill 代码更新完成！"
+
+    echo "  📦 更新 $repo..."
+    cd "$repo_dir"
+    git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || {
+        echo "  ⚠️ $repo 更新失败"
+        cd - > /dev/null
+        return 1
+    }
+    cd - > /dev/null
+}
+
+sync_skill() {
+    local repo="$1"
+    local skill="$2"
+    local src="$WORKSPACE/$repo/skills/$skill"
+    local dst="$SKILLS_DIR/$skill"
+
+    if [ ! -d "$src" ]; then
+        echo "  ⚠️ 跳过 Skill [$skill]：$repo 中不存在"
+        return
+    fi
+
+    copy_dir_contents "$src" "$dst"
+    echo "  ✅ Skill [$skill] 已同步"
+}
+
+update_repo "xiaolong-upload" && {
+    sync_skill "xiaolong-upload" "auth"
+    sync_skill "xiaolong-upload" "longxia-bootstrap"
+    sync_skill "xiaolong-upload" "longxia-upload"
+}
+
+update_repo "openclaw_upload" && {
+    sync_skill "openclaw_upload" "flash-longxia"
+}
+
+echo "✅ Skill 代码更新与同步完成！"
 UPDATE_EOF
     chmod +x "$WORKSPACE_DIR/update-skills.sh"
 }
