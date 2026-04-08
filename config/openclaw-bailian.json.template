@@ -127,74 +127,16 @@
   },
   "plugins": {
     "allow": [
-      "memory-lancedb-pro",
       "openclaw-weixin"
     ],
     "load": {
-      "paths": [
-        "{{HOME}}/.openclaw/workspace/plugins/memory-lancedb-pro"
-      ]
+      "paths": []
     },
-    "slots": {
-      "memory": "memory-lancedb-pro"
-    },
+    "slots": {},
     "entries": {
       "openclaw-weixin": {
         "enabled": true,
         "config": {}
-      },
-      "memory-lancedb-pro": {
-        "enabled": true,
-        "config": {
-          "dbPath": "{{HOME}}/.openclaw/memory/lancedb-pro-bailian",
-          "embedding": {
-            "provider": "openai-compatible",
-            "apiKey": "{{API_KEY}}",
-            "model": "text-embedding-v4",
-            "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "dimensions": 1024,
-            "chunking": true
-          },
-          "autoCapture": true,
-          "autoRecall": true,
-          "llm": {
-            "auth": "api-key",
-            "apiKey": "{{API_KEY}}",
-            "model": "qwen3-coder-plus",
-            "baseURL": "https://coding.dashscope.aliyuncs.com/v1",
-            "timeoutMs": 30000
-          },
-          "retrieval": {
-            "mode": "hybrid",
-            "candidatePoolSize": 20,
-            "minScore": 0.45,
-            "hardMinScore": 0.55,
-            "rerank": "none",
-            "filterNoise": true,
-            "vectorWeight": 0.7,
-            "bm25Weight": 0.3,
-            "recencyHalfLifeDays": 14,
-            "recencyWeight": 0.1,
-            "lengthNormAnchor": 500,
-            "timeDecayHalfLifeDays": 60,
-            "reinforcementFactor": 0.5,
-            "maxHalfLifeMultiplier": 3
-          },
-          "sessionStrategy": "systemSessionMemory",
-          "mdMirror": {
-            "enabled": true,
-            "dir": "memory-md"
-          },
-          "autoRecallMinLength": 8,
-          "enableManagementTools": false,
-          "autoRecallMinRepeated": 8,
-          "autoRecallMaxItems": 3,
-          "autoRecallMaxChars": 600,
-          "autoRecallPerItemMaxChars": 180,
-          "smartExtraction": true,
-          "extractMinMessages": 4,
-          "extractMaxChars": 8000
-        }
       }
     }
   }

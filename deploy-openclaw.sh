@@ -4,7 +4,7 @@
 # 版本: 2.0.0
 # 说明: 自动完成 OpenClaw 全套部署，包括环境检查、插件安装、
 #       技能克隆、配置文件初始化、定时任务创建等。
-# 固定 OpenClaw 版本: 2026.4.7（稳定版）
+# 固定 OpenClaw 版本: 2026.3.28（稳定版）
 # ============================================================
 
 set -euo pipefail
@@ -28,7 +28,7 @@ STEP_COUNT=0
 TOTAL_STEPS=14
 API_KEY=""
 WECHAT_TARGET=""
-OPENCLAW_VERSION="2026.4.7"
+OPENCLAW_VERSION="2026.3.28"
 
 # ── 用户个性化变量 ───────────────────────────────────────────
 USER_DISPLAY_NAME=""
@@ -42,7 +42,7 @@ CONFIRM_BEFORE_PUBLISH=""
 FEISHU_ENABLED=false
 FEISHU_APP_ID=""
 FEISHU_APP_SECRET=""
-INSTALL_MEMORY_LANCEDB=true
+INSTALL_MEMORY_LANCEDB=false
 INSTALL_LOSSLESS_CLAW=false
 
 # ── 工具函数 ─────────────────────────────────────────────────
@@ -178,20 +178,13 @@ entries = plugins.setdefault("entries", {})
 slots = plugins.setdefault("slots", {})
 installs = plugins.setdefault("installs", {})
 load = plugins.setdefault("load", {})
-memory_path = str(Path.home() / ".openclaw" / "workspace" / "plugins" / "memory-lancedb-pro")
-load_paths = [path for path in load.get("paths", []) if path != memory_path]
+load_paths = [path for path in load.get("paths", []) if "memory-lancedb-pro" not in str(path)]
 
 entries.pop("memory-lancedb-pro", None)
 entries.pop("lossless-claw", None)
 slots.pop("memory", None)
 slots.pop("contextEngine", None)
 installs.pop("lossless-claw", None)
-
-if enable_memory:
-    allow.append("memory-lancedb-pro")
-    slots["memory"] = "memory-lancedb-pro"
-    entries["memory-lancedb-pro"] = template_entries["memory-lancedb-pro"]
-    load_paths.append(memory_path)
 
 plugins["allow"] = allow
 load["paths"] = load_paths
@@ -495,7 +488,7 @@ step7_configure_llm() {
             "$template_file" \
             > "$OPENCLAW_DIR/openclaw.json"
         ok "openclaw.json 已生成 — $provider_name"
-        info "memory-lancedb-pro 已配置为 $provider_name"
+        info "OpenClaw 主配置已生成: $provider_name"
     else
         warn "模板文件不存在: $template_file"
         warn "请手动配置 openclaw.json"
