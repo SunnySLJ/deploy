@@ -43,7 +43,7 @@ FEISHU_ENABLED=false
 FEISHU_APP_ID=""
 FEISHU_APP_SECRET=""
 INSTALL_MEMORY_LANCEDB=true
-INSTALL_LOSSLESS_CLAW=true
+INSTALL_LOSSLESS_CLAW=false
 
 # ── 工具函数 ─────────────────────────────────────────────────
 print_banner() {
@@ -192,15 +192,6 @@ if enable_memory:
     slots["memory"] = "memory-lancedb-pro"
     entries["memory-lancedb-pro"] = template_entries["memory-lancedb-pro"]
     load_paths.append(memory_path)
-
-if enable_lossless:
-    allow.append("lossless-claw")
-    slots["contextEngine"] = "lossless-claw"
-    entries["lossless-claw"] = template_entries["lossless-claw"]
-    installs["lossless-claw"] = {
-        "source": "path",
-        "sourcePath": str(Path.home() / ".openclaw" / "workspace" / "plugins" / "lossless-claw-enhanced"),
-    }
 
 plugins["allow"] = allow
 load["paths"] = load_paths
@@ -504,7 +495,7 @@ step7_configure_llm() {
             "$template_file" \
             > "$OPENCLAW_DIR/openclaw.json"
         ok "openclaw.json 已生成 — $provider_name"
-        info "memory-lancedb-pro 和 lossless-claw 也已配置为 $provider_name"
+        info "memory-lancedb-pro 已配置为 $provider_name"
     else
         warn "模板文件不存在: $template_file"
         warn "请手动配置 openclaw.json"

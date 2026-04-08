@@ -128,8 +128,7 @@
   "plugins": {
     "allow": [
       "memory-lancedb-pro",
-      "openclaw-weixin",
-      "lossless-claw"
+      "openclaw-weixin"
     ],
     "load": {
       "paths": [
@@ -137,8 +136,7 @@
       ]
     },
     "slots": {
-      "memory": "memory-lancedb-pro",
-      "contextEngine": "lossless-claw"
+      "memory": "memory-lancedb-pro"
     },
     "entries": {
       "openclaw-weixin": {
@@ -197,21 +195,6 @@
           "extractMinMessages": 4,
           "extractMaxChars": 8000
         }
-      },
-      "lossless-claw": {
-        "enabled": true,
-        "config": {
-          "freshTailCount": 32,
-          "contextThreshold": 0.75,
-          "incrementalMaxDepth": -1,
-          "summaryModel": "bailian/qwen3-coder-plus"
-        }
-      }
-    },
-    "installs": {
-      "lossless-claw": {
-        "source": "path",
-        "sourcePath": "{{HOME}}/.openclaw/workspace/plugins/lossless-claw-enhanced"
       }
     }
   }
