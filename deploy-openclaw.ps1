@@ -1,148 +1,499 @@
-# ============================================================
-# OpenClaw 一键部署脚本 (Windows PowerShell)
-# 版本: 2.0.1
-# 固定 OpenClaw 版本: 2026.3.28
-# 用法: .\deploy-openclaw.ps1
-# ============================================================
+#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [switch]$NoElevate,
+    [switch]$NonInteractive
+)
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 
-# ── 全局变量 ─────────────────────────────────────────────────
-$OpenClawDir = Join-Path $env:USERPROFILE ".openclaw"
-$WorkspaceDir = Join-Path $OpenClawDir "workspace"
-$SkillsDir = Join-Path $OpenClawDir "skills"
-$DeployDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PythonCmd = ""
-$PythonArgs = @()  # 分离的参数
-$StepCount = 0
-$TotalSteps = 14
-$ApiKey = ""
-$WechatTarget = ""
-$OpenClawVersion = "2026.3.28"
-
-# 用户个性化变量
-$UserDisplayName = ""
-$UserIndustry = ""
-$UserVideoStyle = ""
-$AiName = ""
-$AiEmoji = ""
-$AiVibe = ""
-$AiSoulStyle = ""
-$ConfirmBeforePublish = ""
-$FeishuEnabled = $false
-$FeishuAppId = ""
-$FeishuAppSecret = ""
-$InstallMemoryLancedb = $true
-$InstallLosslessClaw = $true
-
-# ── 工具函数 ─────────────────────────────────────────────────
-function Print-Banner {
-    Write-Host ""
-    Write-Host "==================================================" -ForegroundColor Cyan
-    Write-Host "  OpenClaw 一键部署脚本 (Windows) v2.0" -ForegroundColor Cyan
-    Write-Host "  智能视频发布系统 - 自动化部署" -ForegroundColor Cyan
-    Write-Host ("  固定版本: {0} (稳定版)" -f $OpenClawVersion) -ForegroundColor Cyan
-    Write-Host "==================================================" -ForegroundColor Cyan
-    Write-Host ""
+$script:DeployVersion = "3.0.1"
+$script:OpenClawPackage = "openclaw@latest"
+$script:OpenClawRoot = Join-Path $env:USERPROFILE ".openclaw"
+$script:WorkspaceRoot = Join-Path $script:OpenClawRoot "workspace"
+$script:SkillsRoot = Join-Path $script:OpenClawRoot "skills"
+$script:DeployRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:PythonExe = $null
+$script:PythonArgs = @()
+$script:InstallMemoryPlugin = $true
+$script:InstallContextPlugin = $false
+$script:InstalledOpenClawVersion = "unknown"
+$script:Profile = [ordered]@{
+    UserName = "user"
+    Industry = "general"
+    VideoStyle = "general"
+    AssistantName = "xiawang"
+    AssistantTone = "direct and reliable"
+    ConfirmBeforePublish = "true"
+    SoulStyle = "steady"
+    WechatTarget = ""
+    FeishuEnabled = $false
+    FeishuAppId = ""
+    FeishuAppSecret = ""
+    ApiKey = "{{YOUR_API_KEY}}"
 }
 
-function Step([string]$msg) {
-    $script:StepCount++
+function Write-Title([string]$Text) {
     Write-Host ""
-    Write-Host ("  [{0}/{1}] {2}" -f $StepCount, $TotalSteps, $msg) -ForegroundColor Blue
-    Write-Host "  ------------------------------------------------" -ForegroundColor Blue
+    Write-Host $Text -ForegroundColor Cyan
 }
 
-function OK([string]$msg)   { Write-Host ("  [OK] {0}" -f $msg) -ForegroundColor Green }
-function Warn([string]$msg) { Write-Host ("  [!!] {0}" -f $msg) -ForegroundColor Yellow }
-function Fail([string]$msg) { Write-Host ("  [XX] {0}" -f $msg) -ForegroundColor Red }
-function Info([string]$msg) { Write-Host ("  [>>] {0}" -f $msg) -ForegroundColor Cyan }
+function Write-Info([string]$Text) {
+    Write-Host ("[INFO] {0}" -f $Text) -ForegroundColor Cyan
+}
 
-function Ask-YesNo([string]$prompt, [string]$default = "y") {
-    if ($default -eq "y") {
-        $answer = Read-Host "  $prompt [Y/n]"
-        if ([string]::IsNullOrEmpty($answer)) { $answer = "y" }
-    } else {
-        $answer = Read-Host "  $prompt [y/N]"
-        if ([string]::IsNullOrEmpty($answer)) { $answer = "n" }
+function Write-Ok([string]$Text) {
+    Write-Host ("[OK] {0}" -f $Text) -ForegroundColor Green
+}
+
+function Write-Warn([string]$Text) {
+    Write-Host ("[WARN] {0}" -f $Text) -ForegroundColor Yellow
+}
+
+function Fail([string]$Text) {
+    throw $Text
+}
+
+function Ask-YesNo([string]$Prompt, [bool]$DefaultYes = $true) {
+    if ($NonInteractive) {
+        Write-Info ("auto answer for '{0}': {1}" -f $Prompt, $(if ($DefaultYes) { "yes" } else { "no" }))
+        return $DefaultYes
     }
-    return ($answer -match "^[Yy]")
+    $suffix = if ($DefaultYes) { "[Y/n]" } else { "[y/N]" }
+    $answer = Read-Host ("{0} {1}" -f $Prompt, $suffix)
+    if ([string]::IsNullOrWhiteSpace($answer)) {
+        return $DefaultYes
+    }
+    return $answer -match "^[Yy]"
 }
 
-function Test-Cmd([string]$cmd) {
-    $null -ne (Get-Command $cmd -ErrorAction SilentlyContinue)
+function Ask-Value([string]$Prompt, [string]$DefaultValue = "") {
+    if ($NonInteractive) {
+        Write-Info ("auto value for '{0}': {1}" -f $Prompt, $DefaultValue)
+        return $DefaultValue
+    }
+    $value = Read-Host $Prompt
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $DefaultValue
+    }
+    return $value.Trim()
 }
 
-function Ensure-Dir([string]$path) {
-    if (-not (Test-Path $path)) {
-        New-Item -ItemType Directory -Path $path -Force | Out-Null
+function Test-CommandExists([string]$Name) {
+    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Ensure-Dir([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 }
 
-function Copy-DirContents {
-    param(
-        [string]$Source,
-        [string]$Destination
-    )
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8)
+}
 
+function Write-Ascii([string]$Path, [string]$Content) {
+    $ascii = [System.Text.Encoding]::ASCII
+    [System.IO.File]::WriteAllText($Path, $Content, $ascii)
+}
+
+function Copy-DirContent([string]$Source, [string]$Destination) {
     Ensure-Dir $Destination
-    Get-ChildItem -Path $Source -Force | Copy-Item -Destination $Destination -Recurse -Force
-}
-
-# 执行 Python 命令的辅助函数（解决 "py -3.12" 空格问题）
-function Invoke-Python {
-    param([string[]]$Arguments)
-    if ($script:PythonArgs.Count -gt 0) {
-        $allArgs = $script:PythonArgs + $Arguments
-        & $script:PythonCmd @allArgs
-    } else {
-        & $script:PythonCmd @Arguments
+    Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
     }
 }
 
-function Install-PythonRequirements {
-    param(
-        [string]$Target,
-        [string]$RequirementsFile = "requirements.txt"
-    )
-
-    Push-Location $Target
-    Invoke-Python @("-m", "venv", ".venv")
-    $pipExe = Join-Path $Target ".venv\Scripts\pip.exe"
-    if (Test-Path $pipExe) {
-        & $pipExe install -r $RequirementsFile
-    } else {
-        Invoke-Python @("-m", "pip", "install", "-r", $RequirementsFile)
-    }
+function Invoke-Checked([string]$Command, [string[]]$Arguments, [string]$ErrorText) {
+    & $Command @Arguments
     if ($LASTEXITCODE -ne 0) {
-        Fail ("Python 依赖安装失败: {0}\{1}" -f $Target, $RequirementsFile)
-        exit 1
+        Fail $ErrorText
     }
-    Pop-Location
 }
 
-function Install-NodeDependencies {
-    param([string]$Target)
+function Ensure-Admin {
+    $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($currentIdentity)
+    $isAdmin = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 
-    Push-Location $Target
-    & npm install
-    if ($LASTEXITCODE -ne 0) {
-        Fail ("Node.js 依赖安装失败: {0}" -f $Target)
-        exit 1
-    }
-    Pop-Location
-}
-
-function Sync-OpenClawPluginsConfig {
-    $configPath = Join-Path $OpenClawDir "openclaw.json"
-    if (-not (Test-Path $configPath)) {
+    if ($isAdmin) {
+        Write-Ok "already running as administrator"
         return
     }
 
-    $json = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 100
-    $templateMemoryEntry = $json.plugins.entries."memory-lancedb-pro"
-    $templateLosslessEntry = $json.plugins.entries."lossless-claw"
+    if ($NoElevate) {
+        Write-Warn "administrator permission not available, continuing in user mode"
+        return
+    }
+
+    try {
+        Write-Info "relaunching with administrator permission"
+        $args = @(
+            "-NoProfile"
+            "-NoExit"
+            "-ExecutionPolicy", "Bypass"
+            "-File", ('"{0}"' -f $MyInvocation.MyCommand.Path)
+            "-NoElevate"
+        )
+        $process = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $args -PassThru -ErrorAction Stop
+        if ($process) {
+            exit 0
+        }
+    } catch {
+        Write-Warn "administrator relaunch was blocked, continuing in user mode"
+    }
+}
+
+function Ensure-ExecutionPolicy {
+    try {
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
+    } catch {
+        Write-Warn "failed to set process execution policy, continuing"
+    }
+
+    try {
+        Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
+    } catch {
+        Write-Warn "failed to set current user execution policy, continuing"
+    }
+
+    try {
+        Unblock-File -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction Stop
+    } catch {
+        Write-Warn "failed to unblock script file, continuing"
+    }
+
+    Write-Ok "execution policy step finished"
+}
+
+function Grant-FullControl([string]$Path) {
+    Ensure-Dir $Path
+    $acl = Get-Acl -LiteralPath $Path
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().Name,
+        "FullControl",
+        "ContainerInherit,ObjectInherit",
+        "None",
+        "Allow"
+    )
+    $acl.SetAccessRule($rule)
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Ensure-LocalPermissions {
+    Grant-FullControl $script:OpenClawRoot
+    Grant-FullControl $script:WorkspaceRoot
+    Grant-FullControl $script:SkillsRoot
+    Write-Ok "full control granted to current user for .openclaw"
+}
+
+function Get-OpenClawCmdPath {
+    $command = Get-Command "openclaw.cmd" -ErrorAction SilentlyContinue
+    if (-not $command) {
+        $command = Get-Command "openclaw" -ErrorAction SilentlyContinue
+    }
+    if ($command -and $command.Source) {
+        return $command.Source
+    }
+    return (Join-Path $env:APPDATA "npm\openclaw.cmd")
+}
+
+function Repair-GatewayLauncher {
+    $gatewayPath = Join-Path $script:OpenClawRoot "gateway.cmd"
+    $openclawCmd = Get-OpenClawCmdPath
+    $content = @"
+@echo off
+call "$openclawCmd" gateway --port 18789
+"@
+    Write-Ascii $gatewayPath ($content.Trim() + "`r`n")
+    Write-Ok "gateway launcher repaired for Windows path safety"
+}
+
+function Ensure-GatewayService {
+    $taskName = "OpenClaw Gateway"
+    & schtasks /Query /TN $taskName *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info "installing OpenClaw gateway service"
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & openclaw gateway install *> $null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "gateway install returned non-zero, skip automatic start"
+                return
+            }
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
+
+    Repair-GatewayLauncher
+
+    Write-Info "starting OpenClaw gateway service"
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & openclaw gateway start *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "gateway start returned non-zero, run 'openclaw gateway status --deep' later"
+            return
+        }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    Write-Ok "gateway start command sent"
+}
+
+function Select-Python312 {
+    $candidates = @(
+        @{ Name = "py"; Args = @("-3.12"); Check = @("-3.12", "--version") },
+        @{ Name = "python3.12"; Args = @(); Check = @("--version") },
+        @{ Name = "python"; Args = @(); Check = @("--version") }
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-CommandExists $candidate.Name)) {
+            continue
+        }
+
+        try {
+            $version = & $candidate.Name @($candidate.Check) 2>$null
+            if ($version -match "3\.12") {
+                $script:PythonExe = $candidate.Name
+                $script:PythonArgs = $candidate.Args
+                Write-Ok ("python detected: {0}" -f $version)
+                return
+            }
+        } catch {
+        }
+    }
+
+    Fail "python 3.12 not found"
+}
+
+function Invoke-Python {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+
+    $allArgs = @()
+    $allArgs += $script:PythonArgs
+    $allArgs += $Arguments
+    & $script:PythonExe @allArgs
+    if ($LASTEXITCODE -ne 0) {
+        Fail "python command failed"
+    }
+}
+
+function Install-PythonRequirements([string]$Target, [string]$RequirementsFile = "requirements.txt") {
+    Push-Location $Target
+    try {
+        Invoke-Python -m venv .venv
+        $pipExe = Join-Path $Target ".venv\Scripts\pip.exe"
+        if (Test-Path -LiteralPath $pipExe) {
+            Invoke-Checked $pipExe @("install", "-r", $RequirementsFile) ("pip install failed: {0}" -f $Target)
+        } else {
+            Invoke-Python -m pip install -r $RequirementsFile
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+function Install-NodeDeps([string]$Target) {
+    Push-Location $Target
+    try {
+        Invoke-Checked "npm" @("install") ("npm install failed: {0}" -f $Target)
+    } finally {
+        Pop-Location
+    }
+}
+
+function Clone-OrUpdateRepo([string]$RepoUrl, [string]$TargetPath) {
+    if (Test-Path -LiteralPath (Join-Path $TargetPath ".git")) {
+        Push-Location $TargetPath
+        try {
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & cmd.exe /c "git pull origin main" > $null 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                & cmd.exe /c "git pull origin master" > $null 2>&1
+            }
+            $ErrorActionPreference = $previousErrorActionPreference
+            if ($LASTEXITCODE -ne 0) {
+                Fail ("git pull failed: {0}" -f $TargetPath)
+            }
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+            Pop-Location
+        }
+        return
+    }
+
+    if (Test-Path -LiteralPath $TargetPath) {
+        $hasContent = (Get-ChildItem -LiteralPath $TargetPath -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($hasContent) {
+            $backupPath = "{0}.bak-{1}" -f $TargetPath, (Get-Date -Format "yyyyMMddHHmmss")
+            Move-Item -LiteralPath $TargetPath -Destination $backupPath -Force
+            Write-Warn ("existing non-git directory moved to backup: {0}" -f $backupPath)
+        } else {
+            Remove-Item -LiteralPath $TargetPath -Force
+        }
+    }
+
+    Invoke-Checked "git" @("clone", $RepoUrl, $TargetPath) ("git clone failed: {0}" -f $RepoUrl)
+}
+
+function New-RandomHex([int]$Length = 48) {
+    $bytes = New-Object byte[] ($Length / 2)
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    return ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+}
+
+function Sync-PluginConfig {
+    $configPath = Join-Path $script:OpenClawRoot "openclaw.json"
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return
+    }
+
+    $json = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $plugins = $json.plugins
+    $homeUnix = $env:USERPROFILE.Replace("\", "/")
+    $apiKey = $json.env.ANTHROPIC_AUTH_TOKEN
+    $baseUrl = $json.env.ANTHROPIC_BASE_URL
+    $isBailian = $baseUrl -like "*dashscope*"
+
+    if ($isBailian) {
+        $memoryConfig = [pscustomobject]@{
+            enabled = $true
+            config = [pscustomobject]@{
+                dbPath = "$homeUnix/.openclaw/memory/lancedb-pro-bailian"
+                embedding = [pscustomobject]@{
+                    provider = "openai-compatible"
+                    apiKey = $apiKey
+                    model = "text-embedding-v4"
+                    baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+                    dimensions = 1024
+                    chunking = $true
+                }
+                autoCapture = $true
+                autoRecall = $true
+                llm = [pscustomobject]@{
+                    auth = "api-key"
+                    apiKey = $apiKey
+                    model = "qwen3-coder-plus"
+                    baseURL = "https://coding.dashscope.aliyuncs.com/v1"
+                    timeoutMs = 30000
+                }
+                retrieval = [pscustomobject]@{
+                    mode = "hybrid"
+                    candidatePoolSize = 20
+                    minScore = 0.45
+                    hardMinScore = 0.55
+                    rerank = "none"
+                    filterNoise = $true
+                    vectorWeight = 0.7
+                    bm25Weight = 0.3
+                    recencyHalfLifeDays = 14
+                    recencyWeight = 0.1
+                    lengthNormAnchor = 500
+                    timeDecayHalfLifeDays = 60
+                    reinforcementFactor = 0.5
+                    maxHalfLifeMultiplier = 3
+                }
+                sessionStrategy = "systemSessionMemory"
+                mdMirror = [pscustomobject]@{
+                    enabled = $true
+                    dir = "memory-md"
+                }
+                autoRecallMinLength = 8
+                enableManagementTools = $false
+                autoRecallMinRepeated = 8
+                autoRecallMaxItems = 3
+                autoRecallMaxChars = 600
+                autoRecallPerItemMaxChars = 180
+                smartExtraction = $true
+                extractMinMessages = 4
+                extractMaxChars = 8000
+            }
+        }
+        $contextConfig = [pscustomobject]@{
+            enabled = $true
+            config = [pscustomobject]@{
+                freshTailCount = 32
+                contextThreshold = 0.75
+                incrementalMaxDepth = -1
+                summaryModel = "bailian/qwen3-coder-plus"
+            }
+        }
+    } else {
+        $memoryConfig = [pscustomobject]@{
+            enabled = $true
+            config = [pscustomobject]@{
+                dbPath = "$homeUnix/.openclaw/memory/lancedb-pro-n1n"
+                embedding = [pscustomobject]@{
+                    provider = "openai-compatible"
+                    apiKey = $apiKey
+                    model = "text-embedding-3-small"
+                    baseURL = "https://api.n1n.ai/v1"
+                    dimensions = 1536
+                    chunking = $true
+                }
+                autoCapture = $true
+                autoRecall = $true
+                llm = [pscustomobject]@{
+                    auth = "api-key"
+                    apiKey = $apiKey
+                    model = "gpt-4.1"
+                    baseURL = "https://api.n1n.ai/v1"
+                    timeoutMs = 30000
+                }
+                retrieval = [pscustomobject]@{
+                    mode = "hybrid"
+                    candidatePoolSize = 20
+                    minScore = 0.45
+                    hardMinScore = 0.55
+                    rerank = "none"
+                    filterNoise = $true
+                    vectorWeight = 0.7
+                    bm25Weight = 0.3
+                    rerankModel = "jina-reranker-v3"
+                    rerankEndpoint = "https://api.jina.ai/v1/rerank"
+                    rerankProvider = "jina"
+                    recencyHalfLifeDays = 14
+                    recencyWeight = 0.1
+                    lengthNormAnchor = 500
+                    timeDecayHalfLifeDays = 60
+                    reinforcementFactor = 0.5
+                    maxHalfLifeMultiplier = 3
+                }
+                sessionStrategy = "systemSessionMemory"
+                mdMirror = [pscustomobject]@{
+                    enabled = $true
+                    dir = "memory-md"
+                }
+                autoRecallMinLength = 8
+                enableManagementTools = $false
+                autoRecallMinRepeated = 8
+                autoRecallMaxItems = 3
+                autoRecallMaxChars = 600
+                autoRecallPerItemMaxChars = 180
+                smartExtraction = $true
+                extractMinMessages = 4
+                extractMaxChars = 8000
+            }
+        }
+        $contextConfig = [pscustomobject]@{
+            enabled = $true
+            config = [pscustomobject]@{
+                freshTailCount = 32
+                contextThreshold = 0.75
+                incrementalMaxDepth = -1
+                summaryModel = "openai/gpt-4.1"
+            }
+        }
+    }
     $plugins.allow = @($plugins.allow | Where-Object { $_ -notin @("memory-lancedb-pro", "lossless-claw") })
     $plugins.entries.PSObject.Properties.Remove("memory-lancedb-pro")
     $plugins.entries.PSObject.Properties.Remove("lossless-claw")
@@ -150,978 +501,504 @@ function Sync-OpenClawPluginsConfig {
     $plugins.slots.PSObject.Properties.Remove("contextEngine")
     $plugins.installs.PSObject.Properties.Remove("lossless-claw")
 
-    $memoryPath = (Join-Path $WorkspaceDir "plugins\memory-lancedb-pro").Replace("\", "/")
+    $memoryPath = (Join-Path $script:WorkspaceRoot "plugins\memory-lancedb-pro").Replace("\", "/")
     $plugins.load.paths = @($plugins.load.paths | Where-Object { $_ -ne $memoryPath })
 
-    if ($script:InstallMemoryLancedb) {
+    if ($script:InstallMemoryPlugin) {
         $plugins.allow += "memory-lancedb-pro"
-        $plugins.entries | Add-Member -NotePropertyName "memory-lancedb-pro" -NotePropertyValue $templateMemoryEntry -Force
+        $plugins.entries | Add-Member -NotePropertyName "memory-lancedb-pro" -NotePropertyValue $memoryConfig -Force
         $plugins.slots | Add-Member -NotePropertyName "memory" -NotePropertyValue "memory-lancedb-pro" -Force
         $plugins.load.paths += $memoryPath
     }
 
-    if ($script:InstallLosslessClaw) {
+    if ($script:InstallContextPlugin) {
         $plugins.allow += "lossless-claw"
-        $plugins.entries | Add-Member -NotePropertyName "lossless-claw" -NotePropertyValue $templateLosslessEntry -Force
+        $plugins.entries | Add-Member -NotePropertyName "lossless-claw" -NotePropertyValue $contextConfig -Force
         $plugins.slots | Add-Member -NotePropertyName "contextEngine" -NotePropertyValue "lossless-claw" -Force
         $plugins.installs | Add-Member -NotePropertyName "lossless-claw" -NotePropertyValue @{
             source = "path"
-            sourcePath = (Join-Path $WorkspaceDir "plugins\lossless-claw-enhanced").Replace("\", "/")
+            sourcePath = (Join-Path $script:WorkspaceRoot "plugins\lossless-claw-enhanced").Replace("\", "/")
         } -Force
     }
 
-    $content = $json | ConvertTo-Json -Depth 100
-    [System.IO.File]::WriteAllText($configPath, $content + "`n", [System.Text.Encoding]::UTF8)
+    if (-not $json.commands) {
+        $json | Add-Member -NotePropertyName "commands" -NotePropertyValue @{} -Force
+    }
+    $json.commands.native = $true
+    $json.commands.nativeSkills = $true
+    $json.commands.restart = $true
+    $json.commands.ownerDisplay = "raw"
+
+    Write-Utf8NoBom $configPath (($json | ConvertTo-Json -Depth 100) + "`n")
 }
 
-# ── 步骤 1: 检查系统环境 ─────────────────────────────────────
-function Step1-SystemCheck {
-    Step "检查系统环境"
+function Reset-PluginConfigToBase {
+    $configPath = Join-Path $script:OpenClawRoot "openclaw.json"
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return
+    }
 
-    $osInfo = Get-CimInstance Win32_OperatingSystem
-    OK ("操作系统: Windows {0}" -f $osInfo.Version)
+    $json = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $json.plugins) {
+        return
+    }
 
-    if (Test-Cmd "node") {
-        $nodeVer = & node -v 2>$null
-        OK "Node.js: $nodeVer"
+    $plugins = $json.plugins
+    $plugins.allow = @($plugins.allow | Where-Object { $_ -notin @("memory-lancedb-pro", "lossless-claw") })
+    $plugins.entries.PSObject.Properties.Remove("memory-lancedb-pro")
+    $plugins.entries.PSObject.Properties.Remove("lossless-claw")
+    $plugins.slots.PSObject.Properties.Remove("memory")
+    $plugins.slots.PSObject.Properties.Remove("contextEngine")
+    $plugins.installs.PSObject.Properties.Remove("lossless-claw")
+    if ($plugins.load -and $plugins.load.paths) {
+        $plugins.load.paths = @($plugins.load.paths | Where-Object {
+            $_ -notmatch 'memory-lancedb-pro|lossless-claw-enhanced'
+        })
+    }
+
+    Write-Utf8NoBom $configPath (($json | ConvertTo-Json -Depth 100) + "`n")
+}
+
+function Collect-Profile {
+    Write-Title "Profile setup"
+    $script:Profile.UserName = Ask-Value "User display name" $script:Profile.UserName
+    $script:Profile.Industry = Ask-Value "Industry" $script:Profile.Industry
+    $script:Profile.VideoStyle = Ask-Value "Video style" $script:Profile.VideoStyle
+    $script:Profile.AssistantName = Ask-Value "Assistant name" $script:Profile.AssistantName
+    $script:Profile.AssistantTone = Ask-Value "Assistant tone" $script:Profile.AssistantTone
+    $script:Profile.SoulStyle = Ask-Value "Soul style: steady / strict / lively" $script:Profile.SoulStyle
+    $script:Profile.ConfirmBeforePublish = if (Ask-YesNo "Require manual confirm before publish?" $true) { "true" } else { "false" }
+
+    if (Ask-YesNo "Enable Feishu notification?" $false) {
+        $script:Profile.FeishuAppId = Ask-Value "Feishu App ID"
+        if (-not [string]::IsNullOrWhiteSpace($script:Profile.FeishuAppId)) {
+            $script:Profile.FeishuEnabled = $true
+            $script:Profile.FeishuAppSecret = Ask-Value "Feishu App Secret"
+        }
+    }
+}
+
+function Configure-LLM {
+    Write-Title "LLM config"
+    Write-Host "1. Bailian"
+    Write-Host "2. n1n.ai"
+    $choice = Ask-Value "Select provider" "2"
+    $templatePath = if ($choice -eq "1") {
+        Join-Path $script:DeployRoot "config\openclaw-bailian.json.template"
     } else {
-        Fail "未安装 Node.js! 请先安装 Node.js (v18+)"
-        Info "下载: https://nodejs.org/"
-        exit 1
+        Join-Path $script:DeployRoot "config\openclaw-n1n.json.template"
     }
 
-    if (Test-Cmd "npm") {
-        $npmVer = & npm -v 2>$null
-        OK "npm: $npmVer"
-    } else {
-        Fail "未安装 npm!"
-        exit 1
+    if (-not (Test-Path -LiteralPath $templatePath)) {
+        Fail ("template not found: {0}" -f $templatePath)
     }
 
-    if (Test-Cmd "git") {
-        $gitVer = & git --version 2>$null
-        OK "Git: $gitVer"
-    } else {
-        Fail "未安装 Git!"
-        Info "下载: https://git-scm.com/download/win"
-        exit 1
-    }
+    $script:Profile.ApiKey = Ask-Value "API Key" "{{YOUR_API_KEY}}"
+    $content = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+    $content = $content.Replace("{{API_KEY}}", $script:Profile.ApiKey)
+    $content = $content.Replace("{{HOME}}", $env:USERPROFILE.Replace("\", "/"))
+    $content = $content.Replace("{{GATEWAY_TOKEN}}", (New-RandomHex 48))
+    Write-Utf8NoBom (Join-Path $script:OpenClawRoot "openclaw.json") $content
+    Reset-PluginConfigToBase
 }
 
-# ── 步骤 2: 检查 Python 3.12 ────────────────────────────────
-function Step2-Python {
-    Step "检查 / 安装 Python 3.12"
-
-    # 方案1: py launcher
-    if (Test-Cmd "py") {
-        try {
-            $ver = & py -3.12 --version 2>$null
-            if ($ver -match "3\.12") {
-                $script:PythonCmd = "py"
-                $script:PythonArgs = @("-3.12")
-                OK "Python 3.12: $ver (via py launcher)"
-                return
-            }
-        } catch {}
-    }
-
-    # 方案2: python3.12
-    if (Test-Cmd "python3.12") {
-        $ver = & python3.12 --version 2>$null
-        if ($ver -match "3\.12") {
-            $script:PythonCmd = "python3.12"
-            $script:PythonArgs = @()
-            OK "Python 3.12: $ver"
-            return
+function Setup-WorkspaceFiles {
+    $pythonDisplay = ($script:PythonExe + " " + ($script:PythonArgs -join " ")).Trim()
+    foreach ($name in @("AGENTS.md", "HEARTBEAT.md", "MEMORY.md", "TOOLS.md")) {
+        $src = Join-Path $script:DeployRoot ("workspace\{0}" -f $name)
+        if (-not (Test-Path -LiteralPath $src)) {
+            continue
         }
-    }
 
-    # 方案3: python (检查是否为3.12)
-    if (Test-Cmd "python") {
-        $ver = & python --version 2>$null
-        if ($ver -match "3\.12") {
-            $script:PythonCmd = "python"
-            $script:PythonArgs = @()
-            OK "Python 3.12: $ver"
-            return
-        }
-    }
-
-    Fail "未找到 Python 3.12"
-    Info "请从 https://www.python.org/downloads/ 下载安装 Python 3.12"
-    Info "安装时请勾选 'Add Python to PATH' 和 'py launcher'"
-    exit 1
-}
-
-# ── 步骤 3: 安装 OpenClaw ────────────────────────────────────
-function Step3-InstallOpenClaw {
-    Step ("安装 OpenClaw (版本 {0})" -f $OpenClawVersion)
-
-    if (Test-Cmd "openclaw") {
-        $ocVer = & openclaw --version 2>$null
-        OK "OpenClaw 已安装: $ocVer"
-        if (Ask-YesNo ("是否重新安装为 {0}？" -f $OpenClawVersion) "n") {
-            Info "正在安装..."
-            & npm install -g "@anthropics/openclaw@$OpenClawVersion"
-            OK "安装完成"
-        }
-    } else {
-        Info ("正在安装 OpenClaw {0}..." -f $OpenClawVersion)
-        & npm install -g "@anthropics/openclaw@$OpenClawVersion"
-        OK "安装完成"
-    }
-
-    # 创建目录
-    $dirs = @($OpenClawDir, $WorkspaceDir, $SkillsDir,
-        (Join-Path $WorkspaceDir "inbound_images"),
-        (Join-Path $WorkspaceDir "inbound_videos"),
-        (Join-Path $WorkspaceDir "logs\auth_qr"),
-        (Join-Path $WorkspaceDir "memory"))
-    foreach ($d in $dirs) { Ensure-Dir $d }
-    OK "目录结构已创建"
-}
-
-# ── 步骤 4: 安装微信插件 ─────────────────────────────────────
-function Step4-WechatPlugin {
-    Step "安装微信插件"
-    Info "正在安装 OpenClaw 微信插件..."
-    & npx -y "@tencent-weixin/openclaw-weixin-cli@latest" install
-    OK "微信插件安装完成"
-    Warn "请在 OpenClaw 启动后通过微信扫码完成授权绑定"
-    Warn "绑定命令: openclaw channel connect openclaw-weixin"
-}
-
-# ── 步骤 5: 安装飞书插件 ─────────────────────────────────────
-function Step5-FeishuPlugin {
-    Step "安装飞书插件（可选）"
-
-    if (Ask-YesNo "是否安装飞书插件？" "n") {
-        $script:FeishuAppId = Read-Host "  请输入飞书 App ID (留空跳过)"
-        if (-not [string]::IsNullOrEmpty($FeishuAppId)) {
-            $script:FeishuEnabled = $true
-            $script:FeishuAppSecret = Read-Host "  请输入飞书 App Secret"
-            $credDir = Join-Path $OpenClawDir "credentials"
-            Ensure-Dir $credDir
-            $credJson = '{"appId":"' + $FeishuAppId + '","appSecret":"' + $FeishuAppSecret + '"}'
-            $credJson | Set-Content (Join-Path $credDir "feishu-main-allowFrom.json") -Encoding UTF8
-            OK "飞书凭证已保存"
-        } else {
-            $script:FeishuEnabled = $false
-            Info "跳过飞书插件"
-        }
-    } else {
-        Info "跳过飞书插件"
-    }
-}
-
-# ── 步骤 6: 用户个性化初始化 ─────────────────────────────────
-function Step6-Personalize {
-    Step "用户个性化初始化"
-
-    Write-Host ""
-    Write-Host "  --- 用户信息 ---" -ForegroundColor White
-    $script:UserDisplayName = Read-Host "  你希望 AI 怎么称呼你？(例: 千千、小明)"
-    if ([string]::IsNullOrEmpty($UserDisplayName)) { $script:UserDisplayName = "用户" }
-
-    $script:UserIndustry = Read-Host "  你所在的行业？(例: 美妆、科技、美食、教育、宠物)"
-    if ([string]::IsNullOrEmpty($UserIndustry)) { $script:UserIndustry = "通用" }
-
-    $script:UserVideoStyle = Read-Host "  你的视频风格？(例: 可爱风、科技感、文艺、搞笑、治愈)"
-    if ([string]::IsNullOrEmpty($UserVideoStyle)) { $script:UserVideoStyle = "通用" }
-
-    Write-Host ""
-    Write-Host "  --- AI 助手身份设定 ---" -ForegroundColor White
-    $script:AiName = Read-Host "  AI 助手名字？(默认: 虾王)"
-    if ([string]::IsNullOrEmpty($AiName)) { $script:AiName = "虾王" }
-
-    $script:AiEmoji = Read-Host "  AI 代表表情？(默认: 无)"
-    if ([string]::IsNullOrEmpty($AiEmoji)) { $script:AiEmoji = "" }
-
-    $script:AiVibe = Read-Host "  AI 性格风格？(默认: 轻松幽默)"
-    if ([string]::IsNullOrEmpty($AiVibe)) { $script:AiVibe = "轻松、幽默、直接" }
-
-    Write-Host ""
-    Write-Host "  --- 视频发布设置 ---" -ForegroundColor White
-    if (Ask-YesNo "发起视频发布前是否需要人工确认？(推荐 Yes)") {
-        $script:ConfirmBeforePublish = "true"
-        OK "已设置: 发布前需要人工确认"
-    } else {
-        $script:ConfirmBeforePublish = "false"
-        OK "已设置: 发布自动执行"
-    }
-
-    Write-Host ""
-    Write-Host "  --- AI 灵魂 (SOUL) 设定 ---" -ForegroundColor White
-    Write-Host "  1) 默认模板 - 注重实用、有个性"
-    Write-Host "  2) 严谨专业 - 正式、稳重"
-    Write-Host "  3) 活泼互动 - 可爱、主动聊天"
-    $script:AiSoulStyle = Read-Host "  选择灵魂风格 (1/2/3, 默认 1)"
-    if ([string]::IsNullOrEmpty($AiSoulStyle)) { $script:AiSoulStyle = "1" }
-
-    OK ("个性化: {0} / {1} / {2} / {3}" -f $UserDisplayName, $AiName, $UserIndustry, $UserVideoStyle)
-}
-
-# ── 步骤 7: 配置 LLM ────────────────────────────────────────
-function Step7-ConfigureLLM {
-    Step "配置 LLM 大模型"
-
-    $configPath = Join-Path $OpenClawDir "openclaw.json"
-    if (Test-Path $configPath) {
-        Warn "检测到已有 openclaw.json"
-        if (-not (Ask-YesNo "是否覆盖？" "n")) {
-            Info "保留现有配置"
-            return
-        }
-    }
-
-    Write-Host ""
-    Write-Host "  --- 选择 LLM 服务商 ---" -ForegroundColor White
-    Write-Host "  1) 百炼 Coding Plan - 通义千问系列 (qwen3-coder-plus 等)"
-    Write-Host "     API: https://coding.dashscope.aliyuncs.com"
-    Write-Host ""
-    Write-Host "  2) n1n.ai - GPT-4.1 + Claude Opus 4.1"
-    Write-Host "     API: https://api.n1n.ai"
-    Write-Host "     文档: https://docs.n1n.ai/"
-    Write-Host ""
-    $llmChoice = Read-Host "  请选择 (1/2, 默认 2)"
-    if ([string]::IsNullOrEmpty($llmChoice)) { $llmChoice = "2" }
-
-    $templateFile = ""
-    $providerName = ""
-
-    switch ($llmChoice) {
-        "1" {
-            $templateFile = Join-Path $DeployDir "config\openclaw-bailian.json.template"
-            $providerName = "百炼 Coding Plan"
-            Info "请输入百炼 (DashScope) API Key:"
-            $script:ApiKey = Read-Host "  API Key (sk-sp-xxx)"
-        }
-        default {
-            $templateFile = Join-Path $DeployDir "config\openclaw-n1n.json.template"
-            $providerName = "n1n.ai (GPT-4.1)"
-            Info "请输入 n1n.ai API Key:"
-            $script:ApiKey = Read-Host "  API Key (sk-xxx)"
-        }
-    }
-
-    if ([string]::IsNullOrEmpty($ApiKey)) {
-        Warn "未输入 API Key，使用占位符（部署后需手动填写）"
-        $script:ApiKey = "{{YOUR_API_KEY}}"
-    }
-
-    if (Test-Path $templateFile) {
-        $content = Get-Content $templateFile -Raw -Encoding UTF8
-        $content = $content.Replace("{{API_KEY}}", $ApiKey)
+        $content = Get-Content -LiteralPath $src -Raw -Encoding UTF8
         $content = $content.Replace("{{HOME}}", $env:USERPROFILE)
-        $gwToken = -join ((1..48) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-        $content = $content.Replace("{{GATEWAY_TOKEN}}", $gwToken)
-        [System.IO.File]::WriteAllText($configPath, $content, [System.Text.Encoding]::UTF8)
-        OK ("openclaw.json 已生成 - {0}" -f $providerName)
-        Info ("memory-lancedb-pro 和 lossless-claw 也已配置为 {0}" -f $providerName)
-    } else {
-        Warn ("模板文件不存在: {0}" -f $templateFile)
+        $content = $content.Replace("{{PYTHON_CMD}}", $pythonDisplay)
+        $content = $content.Replace("{{WECHAT_TARGET}}", $script:Profile.WechatTarget)
+        $content = $content.Replace("{{USER_NAME}}", $script:Profile.UserName)
+        $content = $content.Replace("{{FEISHU_APP_ID}}", $script:Profile.FeishuAppId)
+        $content = $content.Replace("{{FEISHU_APP_SECRET}}", $script:Profile.FeishuAppSecret)
+        Write-Utf8NoBom (Join-Path $script:WorkspaceRoot $name) $content
     }
+
+    $identity = @"
+# IDENTITY
+
+- name: $($script:Profile.AssistantName)
+- role: main workspace assistant
+- tone: $($script:Profile.AssistantTone)
+- soul: $($script:Profile.SoulStyle)
+"@
+    Write-Utf8NoBom (Join-Path $script:WorkspaceRoot "IDENTITY.md") ($identity.Trim() + "`n")
+
+    $soul = @"
+# SOUL
+
+- work first, explain second
+- no empty reassurance
+- verify before claiming success
+- be careful with external publishing actions
+"@
+    Write-Utf8NoBom (Join-Path $script:WorkspaceRoot "SOUL.md") ($soul.Trim() + "`n")
+
+    $user = @"
+# USER
+
+- name: $($script:Profile.UserName)
+- industry: $($script:Profile.Industry)
+- video_style: $($script:Profile.VideoStyle)
+- confirm_before_publish: $($script:Profile.ConfirmBeforePublish)
+"@
+    Write-Utf8NoBom (Join-Path $script:WorkspaceRoot "USER.md") ($user.Trim() + "`n")
 }
 
-# ── 步骤 8: 克隆 xiaolong-upload ─────────────────────────────
-function Step8-CloneXiaolongUpload {
-    Step "安装 xiaolong-upload（图片生成视频 Skill）"
+function Setup-UploadConfig {
+    $uploadRoot = Join-Path $script:WorkspaceRoot "openclaw_upload"
+    $configPath = Join-Path $uploadRoot "flash_longxia\config.yaml"
+    Ensure-Dir (Split-Path -Parent $configPath)
 
-    $target = Join-Path $WorkspaceDir "xiaolong-upload"
+    $yaml = @"
+base_url: "http://123.56.58.223:8081"
+upload_url: "http://123.56.58.223:8081/api/v1/file/upload"
+model_config_url: "http://123.56.58.223:8081/api/v1/globalConfig/getModel"
 
-    if (Test-Path $target) {
-        OK "xiaolong-upload 已存在"
-        if (Ask-YesNo "是否拉取最新代码？") {
-            Push-Location $target
-            & git pull origin main 2>$null
-            if ($LASTEXITCODE -ne 0) { & git pull origin master 2>$null }
-            Pop-Location
-            OK "已更新"
-        }
-    } else {
-        Info "正在克隆..."
-        & git clone "https://github.com/SunnySLJ/xiaolong-upload.git" $target
-        OK "克隆完成"
-    }
+device_verify:
+  enabled: false
+  api_path: "/api/v1/device/verify"
 
-    # 安装依赖
-    $reqFile = Join-Path $target "requirements.txt"
-    if (Test-Path $reqFile) {
-        Info "正在安装 Python 依赖..."
-        Install-PythonRequirements -Target $target -RequirementsFile "requirements.txt"
-        OK "依赖已安装"
-    }
+video:
+  poll_interval: 30
+  max_wait_minutes: 30
+  download_retries: 3
+  download_retry_interval: 5
+  output_dir: "./output"
+  confirm_before_generate: $($script:Profile.ConfirmBeforePublish)
+  model: "auto"
+  duration: 10
+  aspectRatio: "16:9"
+  variants: 1
 
-    Write-Host ""
-    if (Ask-YesNo "是否将 xiaolong-upload 中的 Skills (auth, longxia-bootstrap, longxia-upload) 安装到 OpenClaw？") {
-        if (-not (Test-Path $SkillsDir)) { New-Item -ItemType Directory -Path $SkillsDir | Out-Null }
-        $skills = @("auth", "longxia-bootstrap", "longxia-upload")
-        foreach ($skill in $skills) {
-            $srcSkill = Join-Path $target "skills\$skill"
-            $destSkill = Join-Path $SkillsDir $skill
-            if (Test-Path $srcSkill) {
-                Copy-DirContents -Source $srcSkill -Destination $destSkill
-                OK "Skill [$skill] 已安装并更新"
-            } else {
-                Warn "在 xiaolong-upload 中找不到 Skill [$skill]"
-            }
-        }
-    }
+content:
+  industry: "$($script:Profile.Industry)"
+  video_style: "$($script:Profile.VideoStyle)"
+  auto_generate_title: true
+  auto_generate_description: true
+
+notify:
+  wechat_target: "$($script:Profile.WechatTarget)"
+  channel: "openclaw-weixin"
+  feishu:
+    enabled: $($script:Profile.FeishuEnabled.ToString().ToLower())
+    app_id: "$($script:Profile.FeishuAppId)"
+    app_secret: "$($script:Profile.FeishuAppSecret)"
+    notify_on_complete: true
+    notify_on_publish: true
+"@
+    Write-Utf8NoBom $configPath ($yaml.Trim() + "`n")
 }
 
-# ── 步骤 9: 克隆 openclaw_upload ─────────────────────────────
-function Step9-CloneOpenclawUpload {
-    Step "安装 openclaw_upload（视频号发布 Skill）"
-
-    $target = Join-Path $WorkspaceDir "openclaw_upload"
-
-    if (Test-Path $target) {
-        OK "openclaw_upload 已存在"
-        if (Ask-YesNo "是否拉取最新代码？") {
-            Push-Location $target
-            & git pull origin main 2>$null
-            if ($LASTEXITCODE -ne 0) { & git pull origin master 2>$null }
-            Pop-Location
-            OK "已更新"
-        }
-    } else {
-        Info "正在克隆..."
-        & git clone "https://github.com/SunnySLJ/openclaw_upload.git" $target
-        OK "克隆完成"
+function Setup-Cron {
+    $loginTime = Ask-Value "Daily login check time HH:MM" "10:10"
+    $cleanupDay = Ask-Value "Cleanup weekday 0-6" "2"
+    $cleanupTime = Ask-Value "Cleanup time HH:MM" "01:00"
+    $loginParts = $loginTime.Split(":")
+    $cleanupParts = $cleanupTime.Split(":")
+    if ($loginParts.Count -ne 2 -or $cleanupParts.Count -ne 2) {
+        Fail "invalid time format"
     }
 
-    # 安装依赖
-    $reqFile = Join-Path $target "requirements.txt"
-    if (Test-Path $reqFile) {
-        Info "正在安装 Python 依赖..."
-        Install-PythonRequirements -Target $target -RequirementsFile "requirements.txt"
-        OK "依赖已安装"
-    }
+    $pythonDisplay = ($script:PythonExe + " " + ($script:PythonArgs -join " ")).Trim()
+    $xiaolongDir = (Join-Path $script:WorkspaceRoot "xiaolong-upload").Replace("\", "/")
+    $uploadDir = (Join-Path $script:WorkspaceRoot "openclaw_upload").Replace("\", "/")
+    $workspaceDir = $script:WorkspaceRoot.Replace("\", "/")
+    $nowMs = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
 
-    # 创建目录
-    foreach ($sub in @("cookies", "logs", "published", "flash_longxia\output", "scripts")) {
-        Ensure-Dir (Join-Path $target $sub)
-    }
-    $cleanupScriptSrc = Join-Path $DeployDir "scripts\cleanup_uploaded_videos.py"
-    $cleanupScriptDst = Join-Path $target "scripts\cleanup_uploaded_videos.py"
-    if (Test-Path $cleanupScriptSrc) {
-        Copy-Item -Path $cleanupScriptSrc -Destination $cleanupScriptDst -Force
-        OK "视频清理脚本已安装"
-    } else {
-        Warn "缺少视频清理脚本模板"
-    }
-
-    # 生成 config.yaml（不用 here-string，用数组拼接避免引号问题）
-    Info "正在生成 config.yaml..."
-    $lines = @()
-    $lines += "# 帧龙虾 配置文件 (自动生成)"
-    $lines += 'base_url: "http://123.56.58.223:8081"'
-    $lines += 'upload_url: "http://123.56.58.223:8081/api/v1/file/upload"'
-    $lines += 'model_config_url: "http://123.56.58.223:8081/api/v1/globalConfig/getModel"'
-    $lines += ""
-    $lines += "device_verify:"
-    $lines += "  enabled: false"
-    $lines += '  api_path: "/api/v1/device/verify"'
-    $lines += ""
-    $lines += "video:"
-    $lines += "  poll_interval: 30"
-    $lines += "  max_wait_minutes: 30"
-    $lines += "  download_retries: 3"
-    $lines += "  download_retry_interval: 5"
-    $lines += '  output_dir: "./output"'
-    $lines += ("  confirm_before_generate: {0}" -f $ConfirmBeforePublish)
-    $lines += '  model: "auto"'
-    $lines += "  duration: 10"
-    $lines += '  aspectRatio: "16:9"'
-    $lines += "  variants: 1"
-    $lines += ""
-    $lines += "content:"
-    $lines += ('  industry: "{0}"' -f $UserIndustry)
-    $lines += ('  video_style: "{0}"' -f $UserVideoStyle)
-    $lines += "  auto_generate_title: true"
-    $lines += "  auto_generate_description: true"
-    $lines += ""
-    $lines += "notify:"
-    $lines += '  wechat_target: ""'
-    $lines += '  channel: "openclaw-weixin"'
-
-    if ($FeishuEnabled) {
-        $lines += "  feishu:"
-        $lines += "    enabled: true"
-        $lines += ('    app_id: "{0}"' -f $FeishuAppId)
-        $lines += ('    app_secret: "{0}"' -f $FeishuAppSecret)
-        $lines += "    notify_on_complete: true"
-        $lines += "    notify_on_publish: true"
-    } else {
-        $lines += "  feishu:"
-        $lines += "    enabled: false"
-    }
-
-    $configPath = Join-Path $target "flash_longxia\config.yaml"
-    $lines -join "`n" | Set-Content $configPath -Encoding UTF8 -NoNewline
-    OK "config.yaml 已生成"
-
-    Write-Host ""
-    if (Ask-YesNo "是否将 openclaw_upload 中的 Skill (flash-longxia) 安装到 OpenClaw？") {
-        if (-not (Test-Path $SkillsDir)) { New-Item -ItemType Directory -Path $SkillsDir | Out-Null }
-        $srcSkill = Join-Path $target "skills\flash-longxia"
-        $destSkill = Join-Path $SkillsDir "flash-longxia"
-        if (Test-Path $srcSkill) {
-            Copy-DirContents -Source $srcSkill -Destination $destSkill
-            OK "Skill [flash-longxia] 已安装并更新"
-        } else {
-            Warn "在 openclaw_upload 中找不到 Skill [flash-longxia]"
-        }
-    }
-}
-
-# ── 步骤 10: Workspace 配置 ──────────────────────────────────
-function Step10-WorkspaceConfig {
-    Step "初始化 Workspace 配置文件"
-
-    # IDENTITY.md
-    $idFile = Join-Path $WorkspaceDir "IDENTITY.md"
-    if (-not (Test-Path $idFile)) {
-        $idLines = @(
-            "# IDENTITY.md - Who Am I?",
-            "",
-            ("- **Name:** {0}" -f $AiName),
-            "- **Creature:** AI 助手",
-            ("- **Vibe:** {0}" -f $AiVibe),
-            ("- **Emoji:** {0}" -f $AiEmoji),
-            "- **Avatar:**",
-            "",
-            "---",
-            "",
-            "_This is the start of figuring out who you are._"
-        )
-        $idLines -join "`n" | Set-Content $idFile -Encoding UTF8 -NoNewline
-        OK ("IDENTITY.md 已生成 (AI: {0})" -f $AiName)
-    } else {
-        Warn "IDENTITY.md 已存在，跳过"
-    }
-
-    # SOUL.md
-    $soulFile = Join-Path $WorkspaceDir "SOUL.md"
-    if (-not (Test-Path $soulFile)) {
-        switch ($AiSoulStyle) {
-            "2" {
-                $soulLines = @(
-                    "# SOUL.md - Who You Are",
-                    "",
-                    "## Core Truths",
-                    "",
-                    "**严谨专业，以用户为中心。** 所有操作必须准确无误，宁可多确认也不要出错。",
-                    "",
-                    "**只在确认后行动。** 任何涉及发布、删除、修改的操作，必须等待用户明确确认。",
-                    "",
-                    "**用数据说话。** 提供建议时附带依据，避免模糊的表述。",
-                    "",
-                    "## Boundaries",
-                    "",
-                    "- Private things stay private.",
-                    "- When in doubt, ask before acting externally.",
-                    "",
-                    "## 红线规则",
-                    "",
-                    "> 完整内容在 MEMORY.md 中。每次启动必须读取并严格遵守。"
-                )
-            }
-            "3" {
-                $soulLines = @(
-                    "# SOUL.md - Who You Are",
-                    "",
-                    "## Core Truths",
-                    "",
-                    "**活泼互动，让用户开心！** 回复带上表情符号，让对话变得有趣！",
-                    "",
-                    "**主动关心用户。** 不只是完成任务，还要主动问候、关心用户的感受。",
-                    "",
-                    "**用可爱的方式解释复杂的事。** 技术问题也可以用轻松的语言说清楚！",
-                    "",
-                    "## Boundaries",
-                    "",
-                    "- Private things stay private.",
-                    "- When in doubt, ask before acting externally.",
-                    "",
-                    "## 红线规则",
-                    "",
-                    "> 完整内容在 MEMORY.md 中。每次启动必须读取并严格遵守。"
-                )
-            }
-            default {
-                $soulSrc = Join-Path $DeployDir "workspace\SOUL.md"
-                if (Test-Path $soulSrc) {
-                    Copy-Item $soulSrc $soulFile
-                    OK "SOUL.md 已生成 (默认风格)"
-                    # skip the write below
-                    $soulLines = $null
-                } else {
-                    $soulLines = @(
-                        "# SOUL.md - Who You Are",
-                        "",
-                        "## Core Truths",
-                        "",
-                        "**Be genuinely helpful.** Skip filler words, just help.",
-                        "",
-                        "**Have opinions.** You're allowed to disagree.",
-                        "",
-                        "**Be resourceful before asking.** Try to figure it out first.",
-                        "",
-                        "## 红线规则",
-                        "",
-                        "> 完整内容在 MEMORY.md 中。每次启动必须读取并严格遵守。"
-                    )
-                }
-            }
-        }
-        if ($null -ne $soulLines) {
-            $soulLines -join "`n" | Set-Content $soulFile -Encoding UTF8 -NoNewline
-            OK "SOUL.md 已生成"
-        }
-    } else {
-        Warn "SOUL.md 已存在，跳过"
-    }
-
-    # USER.md
-    $userFile = Join-Path $WorkspaceDir "USER.md"
-    if (-not (Test-Path $userFile)) {
-        $userLines = @(
-            ("# USER.md - 关于 {0}" -f $UserDisplayName),
-            "",
-            "## 基本信息",
-            "",
-            ("- **称呼**: {0}" -f $UserDisplayName),
-            "- **时区**: Asia/Shanghai",
-            ("- **行业**: {0}" -f $UserIndustry),
-            "",
-            "## 视频创作偏好",
-            "",
-            ("- **视频风格**: {0}" -f $UserVideoStyle),
-            "- **默认标题**: 由 AI 根据视频内容、用户风格和人物性格自动生成",
-            "- **默认标签**: 由 AI 根据行业和风格自动生成",
-            ("- **文案风格**: 由 AI 根据用户风格、AI 人设和人物情绪自动生成"),
-            ("- **表达人设**: 可适度参考 {0} 的表达气质：{1}" -f $AiName, $AiVibe),
-            "- **变化要求**: 标题和文案不能反复复用固定句式，每次至少换一个切入角度（观察 / 共鸣 / 故事 / 反差 / 氛围）",
-            "- **人物优先级**: 如果画面里有人物，优先写出人物性格、情绪、关系感或反差点",
-            "",
-            "## 通知偏好",
-            "",
-            "- **登录二维码**: 通过微信发送",
-            "- **视频生成完成**: 微信通知 + 发送视频文件"
-        )
-        $userLines -join "`n" | Set-Content $userFile -Encoding UTF8 -NoNewline
-        OK "USER.md 已生成"
-    } else {
-        Warn "USER.md 已存在，跳过"
-    }
-
-    # 其他文件从模板复制
-    $templateFiles = @("AGENTS.md", "MEMORY.md", "HEARTBEAT.md", "TOOLS.md")
-    foreach ($f in $templateFiles) {
-        $srcFile = Join-Path $DeployDir "workspace\$f"
-        $dstFile = Join-Path $WorkspaceDir $f
-        if ((Test-Path $srcFile) -and -not (Test-Path $dstFile)) {
-            $content = Get-Content $srcFile -Raw -Encoding UTF8
-            $content = $content.Replace("{{HOME}}", $env:USERPROFILE)
-            $content = $content.Replace("{{PYTHON_CMD}}", ($PythonCmd + " " + ($PythonArgs -join " ")).Trim())
-            $content = $content.Replace("{{WECHAT_TARGET}}", "")
-            $content = $content.Replace("{{USER_NAME}}", $UserDisplayName)
-            $content = $content.Replace("{{FEISHU_APP_ID}}", $FeishuAppId)
-            $content = $content.Replace("{{FEISHU_APP_SECRET}}", $FeishuAppSecret)
-            [System.IO.File]::WriteAllText($dstFile, $content, [System.Text.Encoding]::UTF8)
-            OK "$f 已复制"
-        } elseif (Test-Path $dstFile) {
-            Warn "$f 已存在，跳过"
-        }
-    }
-}
-
-# ── 步骤 11: 安装本地 Skills（备用）──────────────────────────────
-function Step11-InstallSkills {
-    Step "安装本地 Skills（技能后备）"
-
-    $skillNames = @("flash-longxia", "auth", "longxia-upload", "longxia-bootstrap", "video-cleanup")
-    foreach ($skill in $skillNames) {
-        $src = Join-Path $DeployDir "skills\$skill"
-        $dst = Join-Path $SkillsDir $skill
-        if ((Test-Path $src) -and -not (Test-Path $dst)) {
-            Info "从部署包复制后备 Skill [$skill]"
-            Copy-DirContents -Source $src -Destination $dst
-            OK "本地 Skill [$skill] 已安装"
-        } elseif (Test-Path $dst) {
-            Info "Skill [$skill] 已存在（通常来自网络仓库更新），跳过本地覆盖"
-        }
-    }
-
-    # 更新 bootstrap 配置
-    $bcDir = Join-Path $SkillsDir "longxia-bootstrap"
-    if (Test-Path $bcDir) {
-        $pyFullCmd = ($PythonCmd + " " + ($PythonArgs -join " ")).Trim()
-        $bcJson = '{"project_root":"' + (Join-Path $WorkspaceDir "xiaolong-upload").Replace("\", "\\") + '","python_cmd":"' + $pyFullCmd + '"}'
-        $bcJson | Set-Content (Join-Path $bcDir "project_config.json") -Encoding UTF8
-        OK "longxia-bootstrap 配置已更新"
-    }
-}
-
-# ── 步骤 12: 安装 Memory / Context 插件 ─────────────────────
-function Step12-ConfigureMemory {
-    Step "安装 Memory / Context 插件"
-
-    Ensure-Dir (Join-Path $OpenClawDir "memory")
-    Ensure-Dir (Join-Path $WorkspaceDir "memory")
-    Ensure-Dir (Join-Path $OpenClawDir "memory-md")
-    
-    $pluginsDir = Join-Path $WorkspaceDir "plugins"
-    Ensure-Dir $pluginsDir
-
-    Write-Host ""
-    if (Ask-YesNo "是否安装 memory-lancedb-pro (高级记忆插件)？") {
-        $mlpDir = Join-Path $pluginsDir "memory-lancedb-pro"
-        if (Test-Path $mlpDir) {
-            OK "memory-lancedb-pro 已存在"
-            if (Ask-YesNo "是否拉取最新代码？") {
-                Push-Location $mlpDir
-                & git pull origin main 2>$null
-                if ($LASTEXITCODE -ne 0) { & git pull origin master 2>$null }
-                Pop-Location
-            }
-        } else {
-            Info "正在克隆 memory-lancedb-pro..."
-            & git clone "https://github.com/CortexReach/memory-lancedb-pro.git" $mlpDir
-            OK "memory-lancedb-pro 克隆完成"
-        }
-        if (Test-Path (Join-Path $mlpDir "package.json")) {
-            Info "安装 memory-lancedb-pro 依赖..."
-            Install-NodeDependencies -Target $mlpDir
-            OK "依赖安装完成"
-        }
-    } else {
-        $script:InstallMemoryLancedb = $false
-    }
-
-    Write-Host ""
-    if (Ask-YesNo "是否安装 lossless-claw-enhanced (上下文无损压缩插件)？") {
-        $lcDir = Join-Path $pluginsDir "lossless-claw-enhanced"
-        if (Test-Path $lcDir) {
-            OK "lossless-claw-enhanced 已存在"
-            if (Ask-YesNo "是否拉取最新代码？") {
-                Push-Location $lcDir
-                & git pull origin main 2>$null
-                if ($LASTEXITCODE -ne 0) { & git pull origin master 2>$null }
-                Pop-Location
-            }
-        } else {
-            Info "正在克隆 lossless-claw-enhanced..."
-            & git clone "https://github.com/win4r/lossless-claw-enhanced.git" $lcDir
-            OK "lossless-claw-enhanced 克隆完成"
-        }
-        if (Test-Path (Join-Path $lcDir "package.json")) {
-            Info "安装 lossless-claw-enhanced 依赖..."
-            Install-NodeDependencies -Target $lcDir
-            OK "依赖安装完成"
-        }
-    } else {
-        $script:InstallLosslessClaw = $false
-    }
-
-    Sync-OpenClawPluginsConfig
-    Info "插件配置已与 openclaw.json 同步"
-    OK "Memory / Context 操作完成"
-}
-
-# ── 步骤 13: 创建定时任务 ────────────────────────────────────
-function Step13-CreateCron {
-    Step "创建定时任务"
-
-    Ensure-Dir (Join-Path $OpenClawDir "cron")
-
-    Write-Host ""
-    Info "定时任务 1: 每日登录状态检查"
-    $loginCheckTime = Read-Host "  每天几点检查？(默认 10:10, 格式 HH:MM)"
-    if ([string]::IsNullOrEmpty($loginCheckTime)) { $loginCheckTime = "10:10" }
-
-    Write-Host ""
-    Info "定时任务 2: 每周视频清理"
-    Write-Host "  0=周日 1=周一 2=周二 3=周三 4=周四 5=周五 6=周六"
-    $cleanupDay = Read-Host "  每周几清理？(默认 2=周二)"
-    if ([string]::IsNullOrEmpty($cleanupDay)) { $cleanupDay = "2" }
-
-    $cleanupHour = Read-Host "  几点清理？(默认 01:00)"
-    if ([string]::IsNullOrEmpty($cleanupHour)) { $cleanupHour = "01:00" }
-
-    $loginParts = $loginCheckTime.Split(":")
-    $cleanupParts = $cleanupHour.Split(":")
-
-    $nowMs = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
-    $id1 = [guid]::NewGuid().ToString()
-    $id2 = [guid]::NewGuid().ToString()
-    $loginExpr = ("{0} {1} * * *" -f $loginParts[1], $loginParts[0])
-    $cleanupExpr = ("{0} {1} * * {2}" -f $cleanupParts[1], $cleanupParts[0], $cleanupDay)
-    $pyFullCmd = ($PythonCmd + " " + ($PythonArgs -join " ")).Trim()
-    $xiaolongDir = (Join-Path $WorkspaceDir "xiaolong-upload").Replace("\", "/")
-    $uploadDir = (Join-Path $WorkspaceDir "openclaw_upload").Replace("\", "/")
-
-    # 用字符串拼接 JSON（避免 ConvertTo-Json 的嵌套深度和格式问题）
-    $cronJson = @"
+    $cron = @"
 {
   "version": 1,
   "jobs": [
     {
-      "id": "$id1",
+      "id": "$(New-Guid)",
       "agentId": "main",
       "sessionKey": "agent:main:main",
       "name": "login-status-daily-check",
       "enabled": true,
       "createdAtMs": $nowMs,
       "updatedAtMs": $nowMs,
-      "schedule": {"kind": "cron", "expr": "$loginExpr", "tz": "Asia/Shanghai"},
+      "schedule": { "kind": "cron", "expr": "$($loginParts[1]) $($loginParts[0]) * * *", "tz": "Asia/Shanghai" },
       "sessionTarget": "main",
       "wakeMode": "now",
-      "payload": {"kind": "systemEvent", "text": "执行每日平台登录状态检查：cd $xiaolongDir && $pyFullCmd skills/auth/scripts/scheduled_login_check.py"},
-      "state": {"consecutiveErrors": 0}
+      "payload": { "kind": "systemEvent", "text": "cd $xiaolongDir && $pythonDisplay skills/auth/scripts/scheduled_login_check.py" },
+      "state": { "consecutiveErrors": 0 }
     },
     {
-      "id": "$id2",
+      "id": "$(New-Guid)",
       "agentId": "main",
       "sessionKey": "agent:main:main",
       "name": "video-cleanup-weekly",
       "enabled": true,
       "createdAtMs": $nowMs,
       "updatedAtMs": $nowMs,
-      "schedule": {"expr": "$cleanupExpr", "kind": "cron", "tz": "Asia/Shanghai"},
+      "schedule": { "kind": "cron", "expr": "$($cleanupParts[1]) $($cleanupParts[0]) * * $cleanupDay", "tz": "Asia/Shanghai" },
       "sessionTarget": "main",
       "wakeMode": "now",
-      "payload": {"kind": "systemEvent", "text": "执行视频清理任务：cd $uploadDir && $pyFullCmd scripts/cleanup_uploaded_videos.py --workspace-root $WorkspaceDir --project-root $uploadDir"},
-      "state": {"consecutiveErrors": 0}
+      "payload": { "kind": "systemEvent", "text": "cd $uploadDir && $pythonDisplay scripts/cleanup_uploaded_videos.py --workspace-root $workspaceDir --project-root $uploadDir" },
+      "state": { "consecutiveErrors": 0 }
     }
   ]
 }
 "@
-    $cronFile = Join-Path $OpenClawDir "cron\jobs.json"
-    [System.IO.File]::WriteAllText($cronFile, $cronJson, [System.Text.Encoding]::UTF8)
-    OK ("登录检查: 每天 {0} | 视频清理: 每周 {1} 的 {2}" -f $loginCheckTime, $cleanupDay, $cleanupHour)
-
-    # 登录检查配置
-    $loginCfgSrc = Join-Path $DeployDir "config\login_check_config.json"
-    if (Test-Path $loginCfgSrc) {
-        $authDir = Join-Path $SkillsDir "auth"
-        Ensure-Dir $authDir
-        $content = (Get-Content $loginCfgSrc -Raw -Encoding UTF8).Replace("{{LOGIN_CHECK_TIME}}", $loginCheckTime)
-        [System.IO.File]::WriteAllText((Join-Path $authDir "login_check_config.json"), $content, [System.Text.Encoding]::UTF8)
-        OK "登录检查配置已保存"
-    }
+    Write-Utf8NoBom (Join-Path $script:OpenClawRoot "cron\jobs.json") ($cron.Trim() + "`n")
 }
 
-# ── 步骤 14: 配置 Token 和微信推送 ───────────────────────────
-function Step14-ConfigureToken {
-    Step "配置 Token 和微信推送"
-
-    Write-Host ""
-    Info "视频生成 API Token"
-    $videoToken = Read-Host "  请输入视频生成 API Token (留空跳过)"
-    if (-not [string]::IsNullOrEmpty($videoToken)) {
-        $tokenDir = Join-Path $WorkspaceDir "openclaw_upload\flash_longxia"
-        Ensure-Dir $tokenDir
-        $videoToken | Set-Content (Join-Path $tokenDir "token.txt") -Encoding UTF8 -NoNewline
-        OK "Token 已保存"
-    } else {
-        Warn "跳过 Token 配置"
-    }
-
-    Write-Host ""
-    Info "微信推送目标 (格式: xxx@im.wechat)"
-    $script:WechatTarget = Read-Host "  请输入微信 Target ID (留空跳过)"
-    if (-not [string]::IsNullOrEmpty($WechatTarget)) {
-        $configYamlPath = Join-Path $WorkspaceDir "openclaw_upload\flash_longxia\config.yaml"
-        if (Test-Path $configYamlPath) {
-            $content = Get-Content $configYamlPath -Raw -Encoding UTF8
-            $content = $content.Replace('wechat_target: ""', ('wechat_target: "{0}"' -f $WechatTarget))
-            [System.IO.File]::WriteAllText($configYamlPath, $content, [System.Text.Encoding]::UTF8)
-        }
-        OK ("微信 Target: {0} (已写入 config.yaml)" -f $WechatTarget)
-    } else {
-        Info "跳过，绑定微信后手动填写 config.yaml"
-    }
-}
-
-# ── 生成 Skill 更新脚本 ───────────────────────────────────────
-function Setup-SkillUpdater {
-    $updateScript = @'
-param(
-    [string]$Workspace = "$HOME/.openclaw/workspace",
-    [string]$SkillsDir = "$HOME/.openclaw/skills"
-)
-
+function Setup-UpdaterScript {
+    $content = @'
+param()
 $ErrorActionPreference = "Stop"
 
-function Copy-DirContents {
-    param(
-        [Parameter(Mandatory = $true)][string]$Source,
-        [Parameter(Mandatory = $true)][string]$Destination
-    )
-
-    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    Get-ChildItem -Path $Source -Force | ForEach-Object {
-        $target = Join-Path $Destination $_.Name
-        Copy-Item $_.FullName $target -Recurse -Force
+function Copy-DirContent([string]$Source, [string]$Destination) {
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    }
+    Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
     }
 }
 
-function Update-Repo {
-    param([Parameter(Mandatory = $true)][string]$RepoName)
-
-    $repoDir = Join-Path $Workspace $RepoName
-    if (-not (Test-Path (Join-Path $repoDir ".git"))) {
-        Write-Host ("  ⚠️ 跳过 {0}: 未找到 git 仓库" -f $RepoName)
-        return $false
-    }
-
-    Write-Host ("  📦 更新 {0}..." -f $RepoName)
-    Push-Location $repoDir
+function Update-Repo([string]$Path) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Path ".git"))) { return }
+    Push-Location $Path
     try {
         & git pull origin main 2>$null
         if ($LASTEXITCODE -ne 0) {
             & git pull origin master 2>$null
         }
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host ("  ⚠️ {0} 更新失败" -f $RepoName)
-            return $false
-        }
     } finally {
         Pop-Location
     }
-
-    return $true
 }
 
-function Sync-Skill {
-    param(
-        [Parameter(Mandatory = $true)][string]$RepoName,
-        [Parameter(Mandatory = $true)][string]$SkillName
-    )
+$workspace = Join-Path $env:USERPROFILE ".openclaw\workspace"
+$skills = Join-Path $env:USERPROFILE ".openclaw\skills"
+$x = Join-Path $workspace "xiaolong-upload"
+$u = Join-Path $workspace "openclaw_upload"
 
-    $source = Join-Path $Workspace (Join-Path $RepoName "skills\$SkillName")
-    $destination = Join-Path $SkillsDir $SkillName
+Update-Repo $x
+Update-Repo $u
 
-    if (-not (Test-Path $source)) {
-        Write-Host ("  ⚠️ 跳过 Skill [{0}]: {1} 中不存在" -f $SkillName, $RepoName)
-        return
+foreach ($name in @("auth", "longxia-bootstrap", "longxia-upload")) {
+    $src = Join-Path $x ("skills\{0}" -f $name)
+    if (Test-Path -LiteralPath $src) {
+        Copy-DirContent $src (Join-Path $skills $name)
     }
-
-    Copy-DirContents -Source $source -Destination $destination
-    Write-Host ("  ✅ Skill [{0}] 已同步" -f $SkillName)
 }
 
-Write-Host "🔄 正在更新 skill 代码..."
-
-if (Update-Repo -RepoName "xiaolong-upload") {
-    Sync-Skill -RepoName "xiaolong-upload" -SkillName "auth"
-    Sync-Skill -RepoName "xiaolong-upload" -SkillName "longxia-bootstrap"
-    Sync-Skill -RepoName "xiaolong-upload" -SkillName "longxia-upload"
+$flash = Join-Path $u "skills\flash-longxia"
+if (Test-Path -LiteralPath $flash) {
+    Copy-DirContent $flash (Join-Path $skills "flash-longxia")
 }
-
-if (Update-Repo -RepoName "openclaw_upload") {
-    Sync-Skill -RepoName "openclaw_upload" -SkillName "flash-longxia"
-}
-
-Write-Host "✅ Skill 代码更新与同步完成！"
 '@
-
-    $updateScriptPath = Join-Path $WorkspaceDir "update-skills.ps1"
-    [System.IO.File]::WriteAllText($updateScriptPath, $updateScript, [System.Text.Encoding]::UTF8)
-    OK "update-skills.ps1 已生成"
+    Write-Utf8NoBom (Join-Path $script:WorkspaceRoot "update-skills.ps1") ($content.Trim() + "`n")
 }
 
-# ── 部署验证 ─────────────────────────────────────────────────
-function Verify-Deployment {
-    Write-Host ""
-    Write-Host "  ================================================" -ForegroundColor Blue
-    Write-Host "  [验证] 部署结果" -ForegroundColor White
-    Write-Host "  ================================================" -ForegroundColor Blue
-
-    $checkFiles = @(
-        @((Join-Path $OpenClawDir "openclaw.json"), "核心配置"),
-        @((Join-Path $WorkspaceDir "MEMORY.md"), "红线规则"),
-        @((Join-Path $WorkspaceDir "SOUL.md"), "AI灵魂"),
-        @((Join-Path $WorkspaceDir "USER.md"), "用户偏好"),
-        @((Join-Path $WorkspaceDir "IDENTITY.md"), "AI身份"),
-        @((Join-Path $OpenClawDir "cron\jobs.json"), "定时任务"),
-        @((Join-Path $WorkspaceDir "openclaw_upload\scripts\cleanup_uploaded_videos.py"), "视频清理脚本")
-    )
-
-    foreach ($item in $checkFiles) {
-        if (Test-Path $item[0]) { OK ("{0}: OK" -f $item[1]) }
-        else { Fail ("{0}: 缺失" -f $item[1]) }
+function Install-Skills {
+    foreach ($name in @("flash-longxia", "auth", "longxia-upload", "longxia-bootstrap", "video-cleanup")) {
+        $src = Join-Path $script:DeployRoot ("skills\{0}" -f $name)
+        if (Test-Path -LiteralPath $src) {
+            Copy-DirContent $src (Join-Path $script:SkillsRoot $name)
+        }
     }
 
-    $checkDirs = @(
-        @((Join-Path $WorkspaceDir "xiaolong-upload"), "xiaolong-upload"),
-        @((Join-Path $WorkspaceDir "openclaw_upload"), "openclaw_upload")
-    )
-    foreach ($item in $checkDirs) {
-        if (Test-Path $item[0]) { OK ("{0}: OK" -f $item[1]) }
-        else { Fail ("{0}: 缺失" -f $item[1]) }
+    $xiaolong = Join-Path $script:WorkspaceRoot "xiaolong-upload"
+    foreach ($name in @("auth", "longxia-bootstrap", "longxia-upload")) {
+        $src = Join-Path $xiaolong ("skills\{0}" -f $name)
+        if (Test-Path -LiteralPath $src) {
+            Copy-DirContent $src (Join-Path $script:SkillsRoot $name)
+        }
     }
 
-    $checkSkills = @("flash-longxia", "auth", "longxia-upload", "longxia-bootstrap", "video-cleanup")
-    foreach ($skill in $checkSkills) {
-        if (Test-Path (Join-Path $SkillsDir $skill)) { OK ("Skill [{0}]: OK" -f $skill) }
-        else { Warn ("Skill [{0}]: 缺失" -f $skill) }
+    $flash = Join-Path $script:WorkspaceRoot "openclaw_upload\skills\flash-longxia"
+    if (Test-Path -LiteralPath $flash) {
+        Copy-DirContent $flash (Join-Path $script:SkillsRoot "flash-longxia")
     }
-
-    Write-Host ""
-    Write-Host ("  用户: {0} | AI: {1} {2}" -f $UserDisplayName, $AiName, $AiEmoji) -ForegroundColor White
-    Write-Host ("  行业: {0} | 风格: {1}" -f $UserIndustry, $UserVideoStyle) -ForegroundColor White
-    Write-Host ("  OpenClaw: {0}" -f $OpenClawVersion) -ForegroundColor Cyan
-    $pyDisplay = ($PythonCmd + " " + ($PythonArgs -join " ")).Trim()
-    Write-Host ("  Python: {0}" -f $pyDisplay) -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  后续操作:" -ForegroundColor White
-    Write-Host "    1. 启动 OpenClaw:  openclaw"
-    Write-Host "    2. 绑定微信:       openclaw channel connect openclaw-weixin"
-    Write-Host "    3. 扫码微信授权"
-    Write-Host ("    4. 告诉 {0}: 帮我安装 xiaolong-upload 和 openclaw_upload" -f $AiName)
-    Write-Host ""
 }
 
-# ── 主函数 ────────────────────────────────────────────────────
+function Install-Plugins {
+    $plugins = Join-Path $script:WorkspaceRoot "plugins"
+    Ensure-Dir $plugins
+
+    if (Ask-YesNo "Install memory-lancedb-pro?" $true) {
+        $memoryDir = Join-Path $plugins "memory-lancedb-pro"
+        Clone-OrUpdateRepo "https://github.com/CortexReach/memory-lancedb-pro.git" $memoryDir
+        if (Test-Path -LiteralPath (Join-Path $memoryDir "package.json")) {
+            Install-NodeDeps $memoryDir
+        }
+    } else {
+        $script:InstallMemoryPlugin = $false
+    }
+
+    if (Ask-YesNo "Install lossless-claw-enhanced?" $false) {
+        $contextDir = Join-Path $plugins "lossless-claw-enhanced"
+        Clone-OrUpdateRepo "https://github.com/win4r/lossless-claw-enhanced.git" $contextDir
+        if (Test-Path -LiteralPath (Join-Path $contextDir "package.json")) {
+            Install-NodeDeps $contextDir
+        }
+    } else {
+        $script:InstallContextPlugin = $false
+    }
+
+    Sync-PluginConfig
+}
+
+function Write-Status {
+    Write-Title "Summary"
+    Write-Host ("OpenClaw version: {0}" -f $script:InstalledOpenClawVersion)
+    Write-Host ("Python: {0} {1}" -f $script:PythonExe, ($script:PythonArgs -join " "))
+    Write-Host ("Workspace: {0}" -f $script:WorkspaceRoot)
+    Write-Host "Next:"
+    Write-Host "1. openclaw"
+    Write-Host "2. openclaw channel connect openclaw-weixin"
+    Write-Host "3. run $HOME\.openclaw\workspace\update-skills.ps1 when you need updates"
+}
+
 function Main {
-    Print-Banner
+    Write-Title ("OpenClaw Windows one-click deploy v{0}" -f $script:DeployVersion)
+    Ensure-Admin
+    Ensure-ExecutionPolicy
 
-    Write-Host "  部署模式:" -ForegroundColor White
-    Write-Host "  1) 全新部署 - 从零安装所有组件"
-    Write-Host "  2) 迁移部署 - 仅复制配置（OpenClaw 已安装）"
-    Write-Host ""
-    $mode = Read-Host "  请选择 (1/2, 默认 1)"
-    if ([string]::IsNullOrEmpty($mode)) { $mode = "1" }
-
-    switch ($mode) {
-        "1" {
-            Step1-SystemCheck; Step2-Python; Step3-InstallOpenClaw
-            Step4-WechatPlugin; Step5-FeishuPlugin; Step6-Personalize
-            Step7-ConfigureLLM; Step8-CloneXiaolongUpload
-            Step9-CloneOpenclawUpload; Step10-WorkspaceConfig
-            Step11-InstallSkills; Step12-ConfigureMemory
-            Step13-CreateCron; Step14-ConfigureToken
-            Setup-SkillUpdater
-            Verify-Deployment
-        }
-        "2" {
-            Step1-SystemCheck; Step2-Python
-            $script:StepCount = 2
-            Step5-FeishuPlugin; Step6-Personalize; Step7-ConfigureLLM
-            Step8-CloneXiaolongUpload; Step9-CloneOpenclawUpload
-            Step10-WorkspaceConfig; Step11-InstallSkills
-            Step12-ConfigureMemory; Step13-CreateCron
-            Step14-ConfigureToken; Setup-SkillUpdater
-            Verify-Deployment
-        }
-        default {
-            Fail "无效选择"
-            exit 1
+    Write-Title "System check"
+    foreach ($cmd in @("node", "npm", "npx", "git")) {
+        if (-not (Test-CommandExists $cmd)) {
+            Fail ("required command not found: {0}" -f $cmd)
         }
     }
+    Select-Python312
+
+    Write-Title "Install OpenClaw"
+    if (Test-CommandExists "openclaw") {
+        $script:InstalledOpenClawVersion = (& openclaw --version 2>$null)
+        Write-Ok ("existing OpenClaw detected: {0}" -f $script:InstalledOpenClawVersion)
+    } else {
+        Invoke-Checked "npm" @("install", "-g", $script:OpenClawPackage) "failed to install OpenClaw"
+        if (Test-CommandExists "openclaw") {
+            $script:InstalledOpenClawVersion = (& openclaw --version 2>$null)
+        }
+    }
+
+    foreach ($dir in @(
+        $script:OpenClawRoot,
+        $script:WorkspaceRoot,
+        $script:SkillsRoot,
+        (Join-Path $script:WorkspaceRoot "inbound_images"),
+        (Join-Path $script:WorkspaceRoot "inbound_videos"),
+        (Join-Path $script:WorkspaceRoot "memory"),
+        (Join-Path $script:WorkspaceRoot "plugins"),
+        (Join-Path $script:WorkspaceRoot "logs\auth_qr"),
+        (Join-Path $script:OpenClawRoot "memory"),
+        (Join-Path $script:OpenClawRoot "memory-md"),
+        (Join-Path $script:OpenClawRoot "cron")
+    )) {
+        Ensure-Dir $dir
+    }
+
+    Ensure-LocalPermissions
+
+    Collect-Profile
+    Configure-LLM
+
+    if ($script:Profile.FeishuEnabled) {
+        $credDir = Join-Path $script:OpenClawRoot "credentials"
+        Ensure-Dir $credDir
+        $credJson = @{
+            appId = $script:Profile.FeishuAppId
+            appSecret = $script:Profile.FeishuAppSecret
+        } | ConvertTo-Json -Depth 10
+        Write-Utf8NoBom (Join-Path $credDir "feishu-main-allowFrom.json") ($credJson + "`n")
+    }
+
+    Write-Title "Sync repositories"
+    $xiaolong = Join-Path $script:WorkspaceRoot "xiaolong-upload"
+    $upload = Join-Path $script:WorkspaceRoot "openclaw_upload"
+    Clone-OrUpdateRepo "https://github.com/SunnySLJ/xiaolong-upload.git" $xiaolong
+    Clone-OrUpdateRepo "https://github.com/SunnySLJ/openclaw_upload.git" $upload
+
+    if (Test-Path -LiteralPath (Join-Path $xiaolong "requirements.txt")) {
+        Install-PythonRequirements $xiaolong "requirements.txt"
+    }
+    if (Test-Path -LiteralPath (Join-Path $upload "requirements.txt")) {
+        Install-PythonRequirements $upload "requirements.txt"
+    }
+
+    foreach ($dir in @(
+        (Join-Path $upload "cookies"),
+        (Join-Path $upload "logs"),
+        (Join-Path $upload "published"),
+        (Join-Path $upload "flash_longxia\output"),
+        (Join-Path $upload "scripts")
+    )) {
+        Ensure-Dir $dir
+    }
+
+    $cleanupSrc = Join-Path $script:DeployRoot "scripts\cleanup_uploaded_videos.py"
+    $cleanupDst = Join-Path $upload "scripts\cleanup_uploaded_videos.py"
+    if (Test-Path -LiteralPath $cleanupSrc) {
+        Copy-Item -LiteralPath $cleanupSrc -Destination $cleanupDst -Force
+    }
+
+    Setup-WorkspaceFiles
+    Setup-UploadConfig
+    Install-Skills
+    Install-Plugins
+
+    Write-Title "Install channel plugin"
+    if ($NonInteractive) {
+        Write-Warn "skipping automatic weixin login in non-interactive mode"
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & npx -y "@tencent-weixin/openclaw-weixin-cli@latest" install *> $null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "weixin plugin install returned non-zero, continue and login manually later"
+            }
+        } catch {
+            Write-Warn "weixin plugin install hit a non-fatal error, continue and login manually later"
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    } else {
+        Invoke-Checked "npx" @("-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install") "failed to install weixin plugin"
+    }
+
+    Setup-Cron
+    Ensure-GatewayService
+
+    $token = Ask-Value "Video token (optional)"
+    if (-not [string]::IsNullOrWhiteSpace($token)) {
+        $tokenDir = Join-Path $upload "flash_longxia"
+        Ensure-Dir $tokenDir
+        Write-Utf8NoBom (Join-Path $tokenDir "token.txt") $token
+    }
+
+    $script:Profile.WechatTarget = Ask-Value "Wechat target id (optional)" $script:Profile.WechatTarget
+    if (-not [string]::IsNullOrWhiteSpace($script:Profile.WechatTarget)) {
+        Setup-UploadConfig
+    }
+
+    Setup-UpdaterScript
+    Write-Status
 }
 
-Main
+try {
+    Main
+} catch {
+    Write-Host ("[ERROR] {0}" -f $_.Exception.Message) -ForegroundColor Red
+    if ($_.Exception.GetType()) {
+        Write-Host ("[ERROR_TYPE] {0}" -f $_.Exception.GetType().FullName) -ForegroundColor Red
+    }
+    if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+        Write-Host $_.InvocationInfo.PositionMessage -ForegroundColor DarkRed
+    }
+    if ($_.ScriptStackTrace) {
+        Write-Host $($_.ScriptStackTrace) -ForegroundColor DarkRed
+    }
+    exit 1
+}

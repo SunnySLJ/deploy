@@ -153,7 +153,7 @@ brew install python@3.12
 脚本会安装固定版本：
 
 ```bash
-npm install -g @anthropics/openclaw@2026.3.28
+npm install -g openclaw@2026.3.28
 ```
 
 同时创建目录：
