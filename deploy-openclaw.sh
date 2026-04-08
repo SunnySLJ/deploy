@@ -4,7 +4,7 @@
 # 版本: 2.0.0
 # 说明: 自动完成 OpenClaw 全套部署，包括环境检查、插件安装、
 #       技能克隆、配置文件初始化、定时任务创建等。
-# 固定 OpenClaw 版本: 2026.3.28（稳定版）
+# 固定 OpenClaw 版本: 2026.4.7（稳定版）
 # ============================================================
 
 set -euo pipefail
@@ -28,7 +28,7 @@ STEP_COUNT=0
 TOTAL_STEPS=14
 API_KEY=""
 WECHAT_TARGET=""
-OPENCLAW_VERSION="2026.3.28"
+OPENCLAW_VERSION="2026.4.7"
 
 # ── 用户个性化变量 ───────────────────────────────────────────
 USER_DISPLAY_NAME=""
@@ -85,6 +85,36 @@ ask_yes_no() {
 
 check_command() {
     command -v "$1" &>/dev/null
+}
+
+append_path_to_shell_rc() {
+    local path_entry="$1"
+    local rc_file
+    for rc_file in "$HOME/.zprofile" "$HOME/.zshrc"; do
+        touch "$rc_file"
+        if ! grep -Fqs "$path_entry" "$rc_file"; then
+            printf '\nexport PATH="%s:$PATH"\n' "$path_entry" >> "$rc_file"
+        fi
+    done
+}
+
+persist_python_path() {
+    local python_bin="$1"
+    local bin_dir
+    bin_dir="$(dirname "$python_bin")"
+    append_path_to_shell_rc "$bin_dir"
+    export PATH="$bin_dir:$PATH"
+
+    case "$python_bin" in
+        /opt/homebrew/bin/python3.12)
+            append_path_to_shell_rc "/opt/homebrew/opt/python@3.12/libexec/bin"
+            export PATH="/opt/homebrew/opt/python@3.12/libexec/bin:$PATH"
+            ;;
+        /usr/local/bin/python3.12)
+            append_path_to_shell_rc "/usr/local/opt/python@3.12/libexec/bin"
+            export PATH="/usr/local/opt/python@3.12/libexec/bin:$PATH"
+            ;;
+    esac
 }
 
 copy_dir_contents() {
@@ -245,6 +275,7 @@ step2_python() {
             ver=$("$cmd" --version 2>&1 | awk '{print $2}')
             if [[ "$ver" == 3.12* ]]; then
                 PYTHON_CMD="$cmd"
+                persist_python_path "$PYTHON_CMD"
                 ok "Python 3.12: $PYTHON_CMD ($ver)"
                 return
             fi
@@ -257,7 +288,9 @@ step2_python() {
             info "正在安装 Python 3.12..."
             brew install python@3.12
             PYTHON_CMD="/opt/homebrew/bin/python3.12"
+            persist_python_path "$PYTHON_CMD"
             ok "Python 3.12 安装完成: $PYTHON_CMD"
+            info "已将 Python 相关 PATH 写入 ~/.zprofile 和 ~/.zshrc"
         else
             fail "Python 3.12 是必需的，请手动安装后重试"
             exit 1
@@ -279,12 +312,12 @@ step3_install_openclaw() {
         ok "OpenClaw 已安装: $oc_ver"
         if ask_yes_no "是否重新安装为指定版本 $OPENCLAW_VERSION？" "n"; then
             info "正在安装 OpenClaw $OPENCLAW_VERSION..."
-            npm install -g "@anthropics/openclaw@$OPENCLAW_VERSION"
+            npm install -g "openclaw@$OPENCLAW_VERSION"
             ok "OpenClaw $OPENCLAW_VERSION 安装完成"
         fi
     else
         info "正在安装 OpenClaw $OPENCLAW_VERSION..."
-        npm install -g "@anthropics/openclaw@$OPENCLAW_VERSION"
+        npm install -g "openclaw@$OPENCLAW_VERSION"
         ok "OpenClaw $OPENCLAW_VERSION 安装完成"
     fi
 
