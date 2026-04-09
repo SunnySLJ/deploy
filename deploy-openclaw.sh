@@ -161,17 +161,13 @@ sync_openclaw_plugins_config() {
         return
     fi
 
-    "$PYTHON_CMD" - "$config_path" "$INSTALL_MEMORY_LANCEDB" "$INSTALL_LOSSLESS_CLAW" <<'PY'
+    "$PYTHON_CMD" - "$config_path" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 config_path = Path(sys.argv[1])
-enable_memory = sys.argv[2].lower() == "true"
-enable_lossless = sys.argv[3].lower() == "true"
-
 data = json.loads(config_path.read_text(encoding="utf-8"))
-template_entries = json.loads(json.dumps(data.get("plugins", {}).get("entries", {})))
 plugins = data.setdefault("plugins", {})
 allow = [item for item in plugins.get("allow", []) if item not in {"memory-lancedb-pro", "lossless-claw"}]
 entries = plugins.setdefault("entries", {})
@@ -922,57 +918,11 @@ step12_configure_memory() {
     local plugins_dir="$WORKSPACE_DIR/plugins"
     mkdir -p "$plugins_dir"
 
-    # 克隆 memory-lancedb-pro
-    echo ""
-    if ask_yes_no "是否安装 memory-lancedb-pro (高级记忆插件)？" "y"; then
-        local mlp_dir="$plugins_dir/memory-lancedb-pro"
-        if [ -d "$mlp_dir" ]; then
-            ok "memory-lancedb-pro 已存在"
-            if ask_yes_no "是否拉取最新代码？"; then
-                cd "$mlp_dir"
-                git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
-                cd "$DEPLOY_DIR"
-            fi
-        else
-            info "正在克隆 memory-lancedb-pro..."
-            git clone https://github.com/CortexReach/memory-lancedb-pro.git "$mlp_dir"
-            ok "memory-lancedb-pro 克隆完成"
-        fi
-        if [ -f "$mlp_dir/package.json" ]; then
-            info "安装 memory-lancedb-pro 依赖..."
-            install_node_dependencies "$mlp_dir"
-            ok "依赖安装完成"
-        fi
-    else
-        INSTALL_MEMORY_LANCEDB=false
-        info "跳过安装 memory-lancedb-pro"
-    fi
+    INSTALL_MEMORY_LANCEDB=false
+    info "跳过安装 memory-lancedb-pro"
 
-    # 克隆 lossless-claw-enhanced
-    echo ""
-    if ask_yes_no "是否安装 lossless-claw-enhanced (上下文无损压缩插件)？" "y"; then
-        local lc_dir="$plugins_dir/lossless-claw-enhanced"
-        if [ -d "$lc_dir" ]; then
-            ok "lossless-claw-enhanced 已存在"
-            if ask_yes_no "是否拉取最新代码？"; then
-                cd "$lc_dir"
-                git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || warn "git pull 失败"
-                cd "$DEPLOY_DIR"
-            fi
-        else
-            info "正在克隆 lossless-claw-enhanced..."
-            git clone https://github.com/win4r/lossless-claw-enhanced.git "$lc_dir"
-            ok "lossless-claw-enhanced 克隆完成"
-        fi
-        if [ -f "$lc_dir/package.json" ]; then
-            info "安装 lossless-claw-enhanced 依赖..."
-            install_node_dependencies "$lc_dir"
-            ok "依赖安装完成"
-        fi
-    else
-        INSTALL_LOSSLESS_CLAW=false
-        info "跳过安装 lossless-claw-enhanced"
-    fi
+    INSTALL_LOSSLESS_CLAW=false
+    info "跳过安装 lossless-claw-enhanced"
 
     sync_openclaw_plugins_config
     info "插件配置已与 openclaw.json 同步"

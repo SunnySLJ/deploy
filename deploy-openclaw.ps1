@@ -15,7 +15,7 @@ $script:SkillsRoot = Join-Path $script:OpenClawRoot "skills"
 $script:DeployRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:PythonExe = $null
 $script:PythonArgs = @()
-$script:InstallMemoryPlugin = $true
+$script:InstallMemoryPlugin = $false
 $script:InstallContextPlugin = $false
 $script:InstalledOpenClawVersion = "unknown"
 $script:Profile = [ordered]@{
@@ -359,141 +359,6 @@ function Sync-PluginConfig {
 
     $json = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $plugins = $json.plugins
-    $homeUnix = $env:USERPROFILE.Replace("\", "/")
-    $apiKey = $json.env.ANTHROPIC_AUTH_TOKEN
-    $baseUrl = $json.env.ANTHROPIC_BASE_URL
-    $isBailian = $baseUrl -like "*dashscope*"
-
-    if ($isBailian) {
-        $memoryConfig = [pscustomobject]@{
-            enabled = $true
-            config = [pscustomobject]@{
-                dbPath = "$homeUnix/.openclaw/memory/lancedb-pro-bailian"
-                embedding = [pscustomobject]@{
-                    provider = "openai-compatible"
-                    apiKey = $apiKey
-                    model = "text-embedding-v4"
-                    baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-                    dimensions = 1024
-                    chunking = $true
-                }
-                autoCapture = $true
-                autoRecall = $true
-                llm = [pscustomobject]@{
-                    auth = "api-key"
-                    apiKey = $apiKey
-                    model = "qwen3-coder-plus"
-                    baseURL = "https://coding.dashscope.aliyuncs.com/v1"
-                    timeoutMs = 30000
-                }
-                retrieval = [pscustomobject]@{
-                    mode = "hybrid"
-                    candidatePoolSize = 20
-                    minScore = 0.45
-                    hardMinScore = 0.55
-                    rerank = "none"
-                    filterNoise = $true
-                    vectorWeight = 0.7
-                    bm25Weight = 0.3
-                    recencyHalfLifeDays = 14
-                    recencyWeight = 0.1
-                    lengthNormAnchor = 500
-                    timeDecayHalfLifeDays = 60
-                    reinforcementFactor = 0.5
-                    maxHalfLifeMultiplier = 3
-                }
-                sessionStrategy = "systemSessionMemory"
-                mdMirror = [pscustomobject]@{
-                    enabled = $true
-                    dir = "memory-md"
-                }
-                autoRecallMinLength = 8
-                enableManagementTools = $false
-                autoRecallMinRepeated = 8
-                autoRecallMaxItems = 3
-                autoRecallMaxChars = 600
-                autoRecallPerItemMaxChars = 180
-                smartExtraction = $true
-                extractMinMessages = 4
-                extractMaxChars = 8000
-            }
-        }
-        $contextConfig = [pscustomobject]@{
-            enabled = $true
-            config = [pscustomobject]@{
-                freshTailCount = 32
-                contextThreshold = 0.75
-                incrementalMaxDepth = -1
-                summaryModel = "bailian/qwen3-coder-plus"
-            }
-        }
-    } else {
-        $memoryConfig = [pscustomobject]@{
-            enabled = $true
-            config = [pscustomobject]@{
-                dbPath = "$homeUnix/.openclaw/memory/lancedb-pro-n1n"
-                embedding = [pscustomobject]@{
-                    provider = "openai-compatible"
-                    apiKey = $apiKey
-                    model = "text-embedding-3-small"
-                    baseURL = "https://api.n1n.ai/v1"
-                    dimensions = 1536
-                    chunking = $true
-                }
-                autoCapture = $true
-                autoRecall = $true
-                llm = [pscustomobject]@{
-                    auth = "api-key"
-                    apiKey = $apiKey
-                    model = "gpt-4.1"
-                    baseURL = "https://api.n1n.ai/v1"
-                    timeoutMs = 30000
-                }
-                retrieval = [pscustomobject]@{
-                    mode = "hybrid"
-                    candidatePoolSize = 20
-                    minScore = 0.45
-                    hardMinScore = 0.55
-                    rerank = "none"
-                    filterNoise = $true
-                    vectorWeight = 0.7
-                    bm25Weight = 0.3
-                    rerankModel = "jina-reranker-v3"
-                    rerankEndpoint = "https://api.jina.ai/v1/rerank"
-                    rerankProvider = "jina"
-                    recencyHalfLifeDays = 14
-                    recencyWeight = 0.1
-                    lengthNormAnchor = 500
-                    timeDecayHalfLifeDays = 60
-                    reinforcementFactor = 0.5
-                    maxHalfLifeMultiplier = 3
-                }
-                sessionStrategy = "systemSessionMemory"
-                mdMirror = [pscustomobject]@{
-                    enabled = $true
-                    dir = "memory-md"
-                }
-                autoRecallMinLength = 8
-                enableManagementTools = $false
-                autoRecallMinRepeated = 8
-                autoRecallMaxItems = 3
-                autoRecallMaxChars = 600
-                autoRecallPerItemMaxChars = 180
-                smartExtraction = $true
-                extractMinMessages = 4
-                extractMaxChars = 8000
-            }
-        }
-        $contextConfig = [pscustomobject]@{
-            enabled = $true
-            config = [pscustomobject]@{
-                freshTailCount = 32
-                contextThreshold = 0.75
-                incrementalMaxDepth = -1
-                summaryModel = "openai/gpt-4.1"
-            }
-        }
-    }
     $plugins.allow = @($plugins.allow | Where-Object { $_ -notin @("memory-lancedb-pro", "lossless-claw") })
     $plugins.entries.PSObject.Properties.Remove("memory-lancedb-pro")
     $plugins.entries.PSObject.Properties.Remove("lossless-claw")
@@ -503,23 +368,6 @@ function Sync-PluginConfig {
 
     $memoryPath = (Join-Path $script:WorkspaceRoot "plugins\memory-lancedb-pro").Replace("\", "/")
     $plugins.load.paths = @($plugins.load.paths | Where-Object { $_ -ne $memoryPath })
-
-    if ($script:InstallMemoryPlugin) {
-        $plugins.allow += "memory-lancedb-pro"
-        $plugins.entries | Add-Member -NotePropertyName "memory-lancedb-pro" -NotePropertyValue $memoryConfig -Force
-        $plugins.slots | Add-Member -NotePropertyName "memory" -NotePropertyValue "memory-lancedb-pro" -Force
-        $plugins.load.paths += $memoryPath
-    }
-
-    if ($script:InstallContextPlugin) {
-        $plugins.allow += "lossless-claw"
-        $plugins.entries | Add-Member -NotePropertyName "lossless-claw" -NotePropertyValue $contextConfig -Force
-        $plugins.slots | Add-Member -NotePropertyName "contextEngine" -NotePropertyValue "lossless-claw" -Force
-        $plugins.installs | Add-Member -NotePropertyName "lossless-claw" -NotePropertyValue @{
-            source = "path"
-            sourcePath = (Join-Path $script:WorkspaceRoot "plugins\lossless-claw-enhanced").Replace("\", "/")
-        } -Force
-    }
 
     if (-not $json.commands) {
         $json | Add-Member -NotePropertyName "commands" -NotePropertyValue @{} -Force
@@ -826,25 +674,10 @@ function Install-Plugins {
     $plugins = Join-Path $script:WorkspaceRoot "plugins"
     Ensure-Dir $plugins
 
-    if (Ask-YesNo "Install memory-lancedb-pro?" $true) {
-        $memoryDir = Join-Path $plugins "memory-lancedb-pro"
-        Clone-OrUpdateRepo "https://github.com/CortexReach/memory-lancedb-pro.git" $memoryDir
-        if (Test-Path -LiteralPath (Join-Path $memoryDir "package.json")) {
-            Install-NodeDeps $memoryDir
-        }
-    } else {
-        $script:InstallMemoryPlugin = $false
-    }
-
-    if (Ask-YesNo "Install lossless-claw-enhanced?" $false) {
-        $contextDir = Join-Path $plugins "lossless-claw-enhanced"
-        Clone-OrUpdateRepo "https://github.com/win4r/lossless-claw-enhanced.git" $contextDir
-        if (Test-Path -LiteralPath (Join-Path $contextDir "package.json")) {
-            Install-NodeDeps $contextDir
-        }
-    } else {
-        $script:InstallContextPlugin = $false
-    }
+    Write-Info "skip memory-lancedb-pro during deployment"
+    $script:InstallMemoryPlugin = $false
+    Write-Info "skip lossless-claw-enhanced during deployment"
+    $script:InstallContextPlugin = $false
 
     Sync-PluginConfig
 }

@@ -124,3 +124,62 @@ cd ~/.openclaw/workspace/openclaw_upload && git pull
 ---
 
 _🦐 虾王 OpenClaw 一键部署包 v1.0.0_
+
+## Docker 镜像方案
+
+这个仓库现在也可以直接构建成可分发的 Docker 镜像，镜像内会预装：
+
+- `openclaw@latest`
+- `xiaolong-upload`
+- `openclaw_upload`
+- 本仓库 `skills/` 里的内置 skills
+- 从这两个项目仓库同步出来的 skills
+
+### 构建镜像
+
+```bash
+docker build -t openclaw-bundled:latest .
+```
+
+### 运行镜像
+
+```bash
+docker run -it --name openclaw \
+  -e OPENCLAW_PROVIDER=n1n \
+  -e OPENCLAW_API_KEY=sk-xxx \
+  -v openclaw-data:/root/.openclaw \
+  openclaw-bundled:latest
+```
+
+建议挂载 `/root/.openclaw`，这样别人更新仓库或补充配置后，容器重建也不会丢数据。
+
+### 使用 docker compose
+
+仓库已经附带 [docker-compose.yml](/C:/Users/爽爽/Desktop/deploy/docker-compose.yml)，最小启动方式：
+
+```bash
+export OPENCLAW_API_KEY=sk-xxx
+docker compose up -d --build
+```
+
+首次启动时，如果卷里还没有 `openclaw.json`，入口脚本会自动按环境变量生成：
+
+- `OPENCLAW_PROVIDER=n1n` 或 `bailian`
+- `OPENCLAW_API_KEY`
+
+如果没有传 `OPENCLAW_API_KEY`，会生成带占位符的配置文件，之后再进容器或挂载卷手动修改也可以。
+
+### 容器内更新两个项目仓库
+
+镜像内置了更新命令：
+
+```bash
+openclaw-update-bundled-repos
+```
+
+这个命令会：
+
+- 更新 `xiaolong-upload`
+- 更新 `openclaw_upload`
+- 重新安装两个仓库需要的依赖
+- 重新把它们对应的 skills 同步到 `~/.openclaw/skills`
